@@ -48,8 +48,6 @@ router.post('/desactivar-reporte', requireAuth, async (req, res) => {
             });
         }
 
-        // TODO Fase 2: detener job de búsqueda continua asociado al id
-
         return res.status(200).json({
             message: 'Registro de finalización de búsqueda histórica guardado correctamente'
         });

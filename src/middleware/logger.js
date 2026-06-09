@@ -15,7 +15,7 @@ const logger = winston.createLogger({
                     const metaStr = Object.keys(meta).length
                         ? JSON.stringify(meta)
                         : '';
-                    return `${timestamp} [${level}] ${message} ${metaStr}`;
+                    return `${String(timestamp)} [${level}] ${String(message)} ${metaStr}`;
                 })
             )
         }),

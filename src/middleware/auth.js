@@ -9,7 +9,7 @@ const { logger } = require('./logger');
 function requireAuth(req, res, next) {
     const authHeader = req.headers['authorization'];
 
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    if (!authHeader?.startsWith('Bearer ')) {
         logger.warn('Acceso sin token', {
             type: 'auth_failure',
             url: req.originalUrl,

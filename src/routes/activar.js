@@ -44,7 +44,6 @@ function validatePayload(body) {
  *
  * La PUI envía aquí los datos de una persona desaparecida.
  * Debemos guardar el reporte e iniciar la búsqueda.
- * TODO Fase 2: disparar búsqueda en SQL Server del PMS.
  */
 router.post('/activar-reporte', requireAuth, async (req, res) => {
     const errors = validatePayload(req.body);

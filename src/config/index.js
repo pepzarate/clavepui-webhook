@@ -1,13 +1,13 @@
 require('dotenv').config();
 
 const config = {
-    port: parseInt(process.env.PORT) || 3000,
+    port: Number.parseInt(process.env.PORT) || 3000,
     nodeEnv: process.env.NODE_ENV || 'development',
     isProd: process.env.NODE_ENV === 'production',
 
     jwt: {
         secret: process.env.JWT_SECRET,
-        expirySeconds: parseInt(process.env.JWT_EXPIRY_SECONDS) || 3600,
+        expirySeconds: Number.parseInt(process.env.JWT_EXPIRY_SECONDS) || 3600,
     },
 
     pui: {
