@@ -1,0 +1,317 @@
+<?xml version="1.0"?>
+<OWASPZAPReport programName="ZAP" version="2.17.0" generated="Tue, 9 Jun 2026 23:19:03" created="2026-06-09T23:19:03.427855882Z">
+	
+		<site name="https://clavepui-webhook-production.up.railway.app" host="clavepui-webhook-production.up.railway.app" port="443" ssl="true">
+			<alerts>
+				
+					<alertitem>
+						<pluginid>100000</pluginid>
+						<alertRef>100000-1</alertRef>
+						<alert>A Client Error response code was returned by the server</alert>
+						<name>A Client Error response code was returned by the server</name>
+						<riskcode>0</riskcode>
+						<confidence>3</confidence>
+						<riskdesc>Informational (High)</riskdesc>
+						<confidencedesc>High</confidencedesc>
+						<desc>&lt;p&gt;A response code of 405 was returned by the server.&lt;/p&gt;&lt;p&gt;This may indicate that the application is failing to handle unexpected input correctly.&lt;/p&gt;&lt;p&gt;Raised by the &apos;Alert on HTTP Response Code Error&apos; script&lt;/p&gt;</desc>
+						<instances>
+							
+								<instance>
+									<uri>https://clavepui-webhook-production.up.railway.app</uri>
+									<nodeName>https://clavepui-webhook-production.up.railway.app</nodeName>
+									<method>GET</method>
+									<param></param>
+									<attack></attack>
+									<evidence>405</evidence>
+									<otherinfo></otherinfo>
+								</instance>
+							
+							
+								<instance>
+									<uri>https://clavepui-webhook-production.up.railway.app</uri>
+									<nodeName>https://clavepui-webhook-production.up.railway.app</nodeName>
+									<method>GET</method>
+									<param></param>
+									<attack></attack>
+									<evidence>429</evidence>
+									<otherinfo></otherinfo>
+								</instance>
+							
+							
+								<instance>
+									<uri>https://clavepui-webhook-production.up.railway.app/</uri>
+									<nodeName>https://clavepui-webhook-production.up.railway.app/</nodeName>
+									<method>GET</method>
+									<param></param>
+									<attack></attack>
+									<evidence>429</evidence>
+									<otherinfo></otherinfo>
+								</instance>
+							
+							
+								<instance>
+									<uri>https://clavepui-webhook-production.up.railway.app/2798741324901073840</uri>
+									<nodeName>https://clavepui-webhook-production.up.railway.app/2798741324901073840</nodeName>
+									<method>GET</method>
+									<param></param>
+									<attack></attack>
+									<evidence>405</evidence>
+									<otherinfo></otherinfo>
+								</instance>
+							
+							
+								<instance>
+									<uri>https://clavepui-webhook-production.up.railway.app/actuator/health</uri>
+									<nodeName>https://clavepui-webhook-production.up.railway.app/actuator/health</nodeName>
+									<method>GET</method>
+									<param></param>
+									<attack></attack>
+									<evidence>429</evidence>
+									<otherinfo></otherinfo>
+								</instance>
+							
+							
+								<instance>
+									<uri>https://clavepui-webhook-production.up.railway.app/computeMetadata/v1/</uri>
+									<nodeName>https://clavepui-webhook-production.up.railway.app/computeMetadata/v1/</nodeName>
+									<method>GET</method>
+									<param></param>
+									<attack></attack>
+									<evidence>404</evidence>
+									<otherinfo></otherinfo>
+								</instance>
+							
+							
+								<instance>
+									<uri>https://clavepui-webhook-production.up.railway.app/health/</uri>
+									<nodeName>https://clavepui-webhook-production.up.railway.app/health/</nodeName>
+									<method>GET</method>
+									<param></param>
+									<attack></attack>
+									<evidence>429</evidence>
+									<otherinfo></otherinfo>
+								</instance>
+							
+							
+								<instance>
+									<uri>https://clavepui-webhook-production.up.railway.app/latest/meta-data/</uri>
+									<nodeName>https://clavepui-webhook-production.up.railway.app/latest/meta-data/</nodeName>
+									<method>GET</method>
+									<param></param>
+									<attack></attack>
+									<evidence>404</evidence>
+									<otherinfo></otherinfo>
+								</instance>
+							
+							
+								<instance>
+									<uri>https://clavepui-webhook-production.up.railway.app/metadata/instance</uri>
+									<nodeName>https://clavepui-webhook-production.up.railway.app/metadata/instance</nodeName>
+									<method>GET</method>
+									<param></param>
+									<attack></attack>
+									<evidence>404</evidence>
+									<otherinfo></otherinfo>
+								</instance>
+							
+							
+								<instance>
+									<uri>https://clavepui-webhook-production.up.railway.app/metadata/v1</uri>
+									<nodeName>https://clavepui-webhook-production.up.railway.app/metadata/v1</nodeName>
+									<method>GET</method>
+									<param></param>
+									<attack></attack>
+									<evidence>404</evidence>
+									<otherinfo></otherinfo>
+								</instance>
+							
+							
+								<instance>
+									<uri>https://clavepui-webhook-production.up.railway.app/opc/v1/instance/</uri>
+									<nodeName>https://clavepui-webhook-production.up.railway.app/opc/v1/instance/</nodeName>
+									<method>GET</method>
+									<param></param>
+									<attack></attack>
+									<evidence>404</evidence>
+									<otherinfo></otherinfo>
+								</instance>
+							
+							
+								<instance>
+									<uri>https://clavepui-webhook-production.up.railway.app/opc/v2/instance/</uri>
+									<nodeName>https://clavepui-webhook-production.up.railway.app/opc/v2/instance/</nodeName>
+									<method>GET</method>
+									<param></param>
+									<attack></attack>
+									<evidence>404</evidence>
+									<otherinfo></otherinfo>
+								</instance>
+							
+							
+								<instance>
+									<uri>https://clavepui-webhook-production.up.railway.app/openstack/latest/meta_data.json</uri>
+									<nodeName>https://clavepui-webhook-production.up.railway.app/openstack/latest/meta_data.json</nodeName>
+									<method>GET</method>
+									<param></param>
+									<attack></attack>
+									<evidence>404</evidence>
+									<otherinfo></otherinfo>
+								</instance>
+							
+						</instances>
+						<count>13</count>
+						<systemic>false</systemic>
+						<solution></solution>
+						<otherinfo></otherinfo>
+						<reference></reference>
+						<cweid>388</cweid>
+						<wascid>20</wascid>
+						<sourceid>5</sourceid>
+					</alertitem>
+				
+				
+					<alertitem>
+						<pluginid>10015</pluginid>
+						<alertRef>10015</alertRef>
+						<alert>Re-examine Cache-control Directives</alert>
+						<name>Re-examine Cache-control Directives</name>
+						<riskcode>0</riskcode>
+						<confidence>1</confidence>
+						<riskdesc>Informational (Low)</riskdesc>
+						<confidencedesc>Low</confidencedesc>
+						<desc>&lt;p&gt;The cache-control header has not been set properly or is missing, allowing the browser and proxies to cache content. For static assets like css, js, or image files this might be intended, however, the resources should be reviewed to ensure that no sensitive content will be cached.&lt;/p&gt;</desc>
+						<instances>
+							
+								<instance>
+									<uri>https://clavepui-webhook-production.up.railway.app/health</uri>
+									<nodeName>https://clavepui-webhook-production.up.railway.app/health</nodeName>
+									<method>GET</method>
+									<param>cache-control</param>
+									<attack></attack>
+									<evidence></evidence>
+									<otherinfo></otherinfo>
+								</instance>
+							
+						</instances>
+						<count>1</count>
+						<systemic>false</systemic>
+						<solution>&lt;p&gt;For secure content, ensure the cache-control HTTP header is set with &quot;no-cache, no-store, must-revalidate&quot;. If an asset should be cached consider setting the directives &quot;public, max-age, immutable&quot;.&lt;/p&gt;</solution>
+						<otherinfo></otherinfo>
+						<reference>&lt;p&gt;https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html#web-content-caching&lt;/p&gt;&lt;p&gt;https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Cache-Control&lt;/p&gt;&lt;p&gt;https://grayduck.mn/2021/09/13/cache-control-recommendations/&lt;/p&gt;</reference>
+						<cweid>525</cweid>
+						<wascid>13</wascid>
+						<sourceid>1</sourceid>
+					</alertitem>
+				
+				
+					<alertitem>
+						<pluginid>10049</pluginid>
+						<alertRef>10049-3</alertRef>
+						<alert>Storable and Cacheable Content</alert>
+						<name>Storable and Cacheable Content</name>
+						<riskcode>0</riskcode>
+						<confidence>2</confidence>
+						<riskdesc>Informational (Medium)</riskdesc>
+						<confidencedesc>Medium</confidencedesc>
+						<desc>&lt;p&gt;The response contents are storable by caching components such as proxy servers, and may be retrieved directly from the cache, rather than from the origin server by the caching servers, in response to similar requests from other users. If the response data is sensitive, personal or user-specific, this may result in sensitive information being leaked. In some cases, this may even result in a user gaining complete control of the session of another user, depending on the configuration of the caching components in use in their environment. This is primarily an issue where &quot;shared&quot; caching servers such as &quot;proxy&quot; caches are configured on the local network. This configuration is typically found in corporate or educational environments, for instance.&lt;/p&gt;</desc>
+						<instances>
+							
+								<instance>
+									<uri>https://clavepui-webhook-production.up.railway.app/health</uri>
+									<nodeName>https://clavepui-webhook-production.up.railway.app/health</nodeName>
+									<method>GET</method>
+									<param></param>
+									<attack></attack>
+									<evidence></evidence>
+									<otherinfo>In the absence of an explicitly specified caching lifetime directive in the response, a liberal lifetime heuristic of 1 year was assumed. This is permitted by rfc7234.</otherinfo>
+								</instance>
+							
+						</instances>
+						<count>1</count>
+						<systemic>false</systemic>
+						<solution>&lt;p&gt;Validate that the response does not contain sensitive, personal or user-specific information. If it does, consider the use of the following HTTP response headers, to limit, or prevent the content being stored and retrieved from the cache by another user:&lt;/p&gt;&lt;p&gt;Cache-Control: no-cache, no-store, must-revalidate, private&lt;/p&gt;&lt;p&gt;Pragma: no-cache&lt;/p&gt;&lt;p&gt;Expires: 0&lt;/p&gt;&lt;p&gt;This configuration directs both HTTP 1.0 and HTTP 1.1 compliant caching servers to not store the response, and to not retrieve the response (without validation) from the cache, in response to a similar request.&lt;/p&gt;</solution>
+						<otherinfo>&lt;p&gt;In the absence of an explicitly specified caching lifetime directive in the response, a liberal lifetime heuristic of 1 year was assumed. This is permitted by rfc7234.&lt;/p&gt;</otherinfo>
+						<reference>&lt;p&gt;https://datatracker.ietf.org/doc/html/rfc7234&lt;/p&gt;&lt;p&gt;https://datatracker.ietf.org/doc/html/rfc7231&lt;/p&gt;&lt;p&gt;https://www.w3.org/Protocols/rfc2616/rfc2616-sec13.html&lt;/p&gt;</reference>
+						<cweid>524</cweid>
+						<wascid>13</wascid>
+						<sourceid>1</sourceid>
+					</alertitem>
+				
+			</alerts>
+		</site>
+	
+	
+		<insights>
+			
+				<insight>
+					<level>Low</level>
+					<reason>Warning</reason>
+					<site></site>
+					<key>insight.log.warn</key>
+					<description>ZAP warnings logged - see the zap.log file for details</description>
+					<statistic>1</statistic>
+				</insight>
+			
+			
+				<insight>
+					<level>Info</level>
+					<reason>Informational</reason>
+					<site>https://clavepui-webhook-production.up.railway.app</site>
+					<key>insight.code.2xx</key>
+					<description>Percentage of responses with status code 2xx</description>
+					<statistic>2</statistic>
+				</insight>
+			
+			
+				<insight>
+					<level>Info</level>
+					<reason>Informational</reason>
+					<site>https://clavepui-webhook-production.up.railway.app</site>
+					<key>insight.code.4xx</key>
+					<description>Percentage of responses with status code 4xx</description>
+					<statistic>97</statistic>
+				</insight>
+			
+			
+				<insight>
+					<level>Info</level>
+					<reason>Informational</reason>
+					<site>https://clavepui-webhook-production.up.railway.app</site>
+					<key>insight.endpoint.ctype.application/json</key>
+					<description>Percentage of endpoints with content type application/json</description>
+					<statistic>100</statistic>
+				</insight>
+			
+			
+				<insight>
+					<level>Info</level>
+					<reason>Informational</reason>
+					<site>https://clavepui-webhook-production.up.railway.app</site>
+					<key>insight.endpoint.method.GET</key>
+					<description>Percentage of endpoints with method GET</description>
+					<statistic>100</statistic>
+				</insight>
+			
+			
+				<insight>
+					<level>Info</level>
+					<reason>Informational</reason>
+					<site>https://clavepui-webhook-production.up.railway.app</site>
+					<key>insight.endpoint.total</key>
+					<description>Count of total endpoints</description>
+					<statistic>12</statistic>
+				</insight>
+			
+			
+				<insight>
+					<level>Info</level>
+					<reason>Informational</reason>
+					<site>https://clavepui-webhook-production.up.railway.app</site>
+					<key>insight.response.slow</key>
+					<description>Percentage of slow responses</description>
+					<statistic>12</statistic>
+				</insight>
+			
+		</insights>
+	
+</OWASPZAPReport>
