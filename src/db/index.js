@@ -3,15 +3,15 @@ const config = require('../config');
 const { logger } = require('../middleware/logger');
 
 const pool = new Pool({
-    connectionString: config.db.connectionString,
-    ssl: config.db.ssl,
-    max: 10,
-    idleTimeoutMillis: 30000,
-    connectionTimeoutMillis: 5000,
+  connectionString: config.db.connectionString,
+  ssl: config.db.ssl,
+  max: 10,
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 5000,
 });
 
 pool.on('error', (err) => {
-    logger.error('Error en pool de PostgreSQL', { error: err.message });
+  logger.error('Error en pool de PostgreSQL', { error: err.message });
 });
 
 /**
@@ -19,10 +19,21 @@ pool.on('error', (err) => {
  * Se ejecuta una vez al arrancar el servidor.
  */
 async function initDb() {
-    const client = await pool.connect();
-    try {
-        // Tabla principal: reportes activos recibidos desde la PUI
-        await client.query(`
+  const client = await pool.connect();
+  try {
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS hoteles (
+        id            SERIAL PRIMARY KEY,
+        nombre        TEXT NOT NULL,
+        rfc           TEXT NOT NULL UNIQUE,
+        pui_clave     TEXT NOT NULL UNIQUE,
+        activo        BOOLEAN DEFAULT TRUE,
+        creado_en     TIMESTAMPTZ DEFAULT NOW()
+      );
+    `);
+
+    // Tabla principal: reportes activos recibidos desde la PUI
+    await client.query(`
       CREATE TABLE IF NOT EXISTS reportes_activos (
         id                TEXT PRIMARY KEY,
         curp              TEXT NOT NULL,
@@ -40,9 +51,12 @@ async function initDb() {
         activo            BOOLEAN DEFAULT TRUE
       );
     `);
-
-        // Tabla de auditoría: registro legal de todas las interacciones
-        await client.query(`
+    await client.query(`
+      ALTER TABLE reportes_activos
+      ADD COLUMN IF NOT EXISTS hotel_id INTEGER REFERENCES hoteles(id);
+    `);
+    // Tabla de auditoría: registro legal de todas las interacciones
+    await client.query(`
       CREATE TABLE IF NOT EXISTS logs_auditoria (
         id          SERIAL PRIMARY KEY,
         tipo        TEXT NOT NULL,
@@ -54,13 +68,13 @@ async function initDb() {
       );
     `);
 
-        logger.info('Base de datos inicializada correctamente');
-    } catch (err) {
-        logger.error('Error inicializando base de datos', { error: err.message });
-        throw err;
-    } finally {
-        client.release();
-    }
+    logger.info('Base de datos inicializada correctamente');
+  } catch (err) {
+    logger.error('Error inicializando base de datos', { error: err.message });
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 module.exports = { pool, initDb };

@@ -1,6 +1,7 @@
 const express = require('express');
 const jwt = require('jsonwebtoken');
 const config = require('../config');
+const { pool } = require('../db');
 const { logger } = require('../middleware/logger');
 
 const router = express.Router();
@@ -9,11 +10,10 @@ const router = express.Router();
  * POST /login
  *
  * La PUI llama aquí para obtener el Bearer token.
- * Manual PUI sección 8.1:
- * - usuario: siempre el string fijo "PUI"
- * - clave: 16-20 chars, mayúscula + número + char especial
+ * Cada hotel tiene su propia PUI_CLAVE — con ella identificamos
+ * a qué tenant pertenece la solicitud.
  */
-router.post('/login', (req, res) => {
+router.post('/login', async (req, res) => {
     const { usuario, clave } = req.body;
 
     if (!usuario || !clave) {
@@ -31,29 +31,50 @@ router.post('/login', (req, res) => {
         return res.status(401).json({ error: 'Credenciales inválidas' });
     }
 
-    if (clave !== config.pui.clave) {
-        logger.warn('Login con clave incorrecta', {
-            type: 'auth_failure',
+    try {
+        // Buscar el hotel por su clave única
+        const result = await pool.query(
+            `SELECT id, nombre, rfc
+       FROM hoteles
+       WHERE pui_clave = $1 AND activo = TRUE`,
+            [clave]
+        );
+
+        if (result.rowCount === 0) {
+            logger.warn('Login con clave no registrada', {
+                type: 'auth_failure',
+                ip: req.ip,
+            });
+            return res.status(401).json({ error: 'Credenciales inválidas' });
+        }
+
+        const hotel = result.rows[0];
+
+        // El JWT incluye el hotel_id para identificar el tenant
+        const token = jwt.sign(
+            {
+                sub: 'pui-gobierno',
+                iss: 'clavepui',
+                hotel_id: hotel.id,
+                rfc: hotel.rfc,
+            },
+            config.jwt.secret,
+            { expiresIn: config.jwt.expirySeconds }
+        );
+
+        logger.info('Token emitido', {
+            type: 'auth_success',
+            hotel_id: hotel.id,
+            nombre: hotel.nombre,
             ip: req.ip,
         });
-        return res.status(401).json({ error: 'Credenciales inválidas' });
+
+        return res.status(200).json({ token });
+
+    } catch (err) {
+        logger.error('Error en login', { error: err.message });
+        return res.status(500).json({ error: 'Error interno del servidor' });
     }
-
-    const token = jwt.sign(
-        {
-            sub: 'pui-gobierno',
-            iss: 'clavepui',
-        },
-        config.jwt.secret,
-        { expiresIn: config.jwt.expirySeconds }
-    );
-
-    logger.info('Token emitido para la PUI', {
-        type: 'auth_success',
-        ip: req.ip,
-    });
-
-    return res.status(200).json({ token });
 });
 
 module.exports = router;

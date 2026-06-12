@@ -12,7 +12,6 @@ const config = {
 
     pui: {
         usuario: 'PUI', // valor fijo que define el manual — nunca cambia
-        clave: process.env.PUI_CLAVE,
     },
 
     db: {
@@ -28,7 +27,7 @@ const config = {
 };
 
 // Validar variables críticas al arrancar
-const required = ['JWT_SECRET', 'PUI_CLAVE', 'DATABASE_URL'];
+const required = ['JWT_SECRET', 'DATABASE_URL'];
 const missing = required.filter(key => !process.env[key]);
 
 if (missing.length > 0) {

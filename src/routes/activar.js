@@ -57,27 +57,33 @@ router.post('/activar-reporte', requireAuth, async (req, res) => {
         sexo_asignado, telefono, correo,
     } = req.body;
 
+    // hotel_id viene del JWT generado en /login
+    const hotel_id = req.puiAuth.hotel_id;
+
     try {
         await pool.query(
             `INSERT INTO reportes_activos
         (id, curp, nombre, primer_apellido, segundo_apellido,
          fecha_nacimiento, fecha_desaparicion, lugar_nacimiento,
-         sexo_asignado, telefono, correo, raw_payload, activo)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,TRUE)
+         sexo_asignado, telefono, correo, raw_payload, hotel_id, activo)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,TRUE)
        ON CONFLICT (id) DO UPDATE SET
          activo = TRUE,
+         hotel_id = $13,
          raw_payload = $12`,
             [
                 id, curp, nombre, primer_apellido, segundo_apellido,
                 fecha_nacimiento, fecha_desaparicion, lugar_nacimiento,
                 sexo_asignado, telefono, correo,
                 JSON.stringify(req.body),
+                hotel_id,
             ]
         );
 
         logger.info('Reporte activado', {
             type: 'activar_reporte',
             id,
+            hotel_id,
             curp: curp.substring(0, 4) + '***',
             ip: req.ip,
         });
