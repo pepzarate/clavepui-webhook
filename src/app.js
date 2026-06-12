@@ -9,6 +9,7 @@ const { initDb } = require('./db');
 const authRoutes = require('./routes/auth');
 const activarRoutes = require('./routes/activar');
 const desactivarRoutes = require('./routes/desactivar');
+const adminRoutes = require('./routes/admin');
 
 const app = express();
 
@@ -87,6 +88,7 @@ app.use('/', activarRoutes);              // POST /activar-reporte
 // POST /activar-reporte-prueba
 app.use('/', desactivarRoutes);           // POST /desactivar-reporte
 
+app.use('/', adminRoutes);
 // ── 8. Health check — Railway lo monitorea cada 30 segundos ──────────────────
 app.get('/health', (req, res) => {
     res.status(200).json({
