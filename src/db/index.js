@@ -68,6 +68,43 @@ async function initDb() {
       );
     `);
 
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS check_ins (
+        id              SERIAL PRIMARY KEY,
+        hotel_id        INTEGER NOT NULL REFERENCES hoteles(id),
+        curp            TEXT NOT NULL,
+        nombre          TEXT,
+        primer_apellido TEXT,
+        segundo_apellido TEXT,
+        fecha_nacimiento TEXT,
+        lugar_nacimiento TEXT,
+        sexo_asignado   TEXT,
+        telefono        TEXT,
+        correo          TEXT,
+        fecha_checkin   TIMESTAMPTZ DEFAULT NOW(),
+        estado_pui      TEXT DEFAULT 'pendiente',
+        intentos_pui    INTEGER DEFAULT 0,
+        ultimo_error    TEXT,
+        registrado_por  TEXT,
+        creado_en       TIMESTAMPTZ DEFAULT NOW()
+      );
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_check_ins_hotel_id
+      ON check_ins(hotel_id);
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_check_ins_curp
+      ON check_ins(curp);
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_check_ins_fecha
+      ON check_ins(fecha_checkin);
+    `);
+
     logger.info('Base de datos inicializada correctamente');
   } catch (err) {
     logger.error('Error inicializando base de datos', { error: err.message });

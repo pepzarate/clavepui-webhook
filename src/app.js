@@ -2,6 +2,7 @@ const express = require('express');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const config = require('./config');
+require('./services/puiQueue');
 const { logger, auditLogger } = require('./middleware/logger');
 const { initDb } = require('./db');
 
@@ -10,6 +11,7 @@ const authRoutes = require('./routes/auth');
 const activarRoutes = require('./routes/activar');
 const desactivarRoutes = require('./routes/desactivar');
 const adminRoutes = require('./routes/admin');
+const checkInsRoutes = require('./routes/checkIns');
 
 const app = express();
 
@@ -87,8 +89,9 @@ app.use('/', loginLimiter, authRoutes);   // POST /login
 app.use('/', activarRoutes);              // POST /activar-reporte
 // POST /activar-reporte-prueba
 app.use('/', desactivarRoutes);           // POST /desactivar-reporte
-
 app.use('/', adminRoutes);
+app.use('/', checkInsRoutes);
+
 // ── 8. Health check — Railway lo monitorea cada 30 segundos ──────────────────
 app.get('/health', (req, res) => {
     res.status(200).json({

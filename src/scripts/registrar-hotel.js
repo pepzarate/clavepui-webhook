@@ -44,7 +44,7 @@ async function registrar() {
         console.log(`   Nombre:    ${hotel.nombre}`);
         console.log(`   RFC:       ${hotel.rfc}`);
         console.log(`\n📋 Datos para registrar en el portal PUI:`);
-        console.log(`   URL base:  https://api.clavepui.mx`);
+        console.log(`   URL base:  https://api.clavepui.com`);
         console.log(`   Usuario:   PUI`);
         console.log(`   Clave:     ${HOTEL.pui_clave}`);
         console.log('\n');
