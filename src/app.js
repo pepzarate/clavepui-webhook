@@ -65,6 +65,7 @@ app.use((req, res, next) => {
     res.setHeader('Access-Control-Allow-Headers',
         'Content-Type, Authorization, x-hotel-key, x-admin-token');
     res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader('Access-Control-Max-Age', '86400');
 
     if (req.method === 'OPTIONS') return res.status(204).end();
     next();
@@ -84,7 +85,7 @@ const globalLimiter = rateLimit({
 
 const loginLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
-    max: 20,
+    max: 50, // aumentar de 20 a 50
     handler: (req, res) => {
         logger.warn('Rate limit login excedido', { ip: req.ip });
         res.status(429).json({ error: 'Demasiados intentos de autenticación' });
