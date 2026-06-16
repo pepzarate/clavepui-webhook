@@ -47,11 +47,24 @@ app.use((req, res, next) => {
 
 // ── 3. CORS restrictivo — no permitir wildcard en APIs autenticadas ───────────
 app.use((req, res, next) => {
-    res.setHeader('Access-Control-Allow-Origin',
-        'https://plataformadebusqueda.gob.mx');
-    res.setHeader('Access-Control-Allow-Methods', 'POST');
+    const allowedOrigins = [
+        'https://plataformadebusqueda.gob.mx',
+        'https://app.clavepui.com',
+        'http://localhost:4321',
+        'http://localhost:4322',
+        'http://localhost:4323',
+    ];
+
+    const origin = req.headers.origin;
+    if (origin && allowedOrigins.includes(origin)) {
+        res.setHeader('Access-Control-Allow-Origin', origin);
+    }
+
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers',
-        'Content-Type, Authorization');
+        'Content-Type, Authorization, x-hotel-key, x-admin-token');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+
     if (req.method === 'OPTIONS') return res.status(204).end();
     next();
 });

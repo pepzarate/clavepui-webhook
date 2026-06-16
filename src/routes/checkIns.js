@@ -317,4 +317,49 @@ router.get('/check-ins/export', requireHotel, async (req, res) => {
     }
 });
 
+/**
+ * GET /reportes-activos
+ * Lista los reportes de búsqueda activos recibidos de la PUI.
+ */
+router.get('/reportes-activos', requireHotel, async (req, res) => {
+    try {
+        const result = await pool.query(
+            `SELECT id, curp, nombre, primer_apellido,
+              recibido_en, activo
+       FROM reportes_activos
+       WHERE hotel_id = $1 AND activo = TRUE
+       ORDER BY recibido_en DESC`,
+            [req.hotel.id]
+        );
+
+        return res.status(200).json({ reportes: result.rows });
+    } catch (err) {
+        logger.error('Error obteniendo reportes activos', { error: err.message });
+        return res.status(500).json({ error: 'Error interno del servidor' });
+    }
+});
+
+/**
+ * GET /reportes-historial
+ * Lista el historial de reportes (activos e inactivos).
+ */
+router.get('/reportes-historial', requireHotel, async (req, res) => {
+    try {
+        const result = await pool.query(
+            `SELECT id, curp, nombre, primer_apellido,
+              recibido_en, activo
+       FROM reportes_activos
+       WHERE hotel_id = $1
+       ORDER BY recibido_en DESC
+       LIMIT 50`,
+            [req.hotel.id]
+        );
+
+        return res.status(200).json({ reportes: result.rows });
+    } catch (err) {
+        logger.error('Error obteniendo historial reportes', { error: err.message });
+        return res.status(500).json({ error: 'Error interno del servidor' });
+    }
+});
+
 module.exports = router;

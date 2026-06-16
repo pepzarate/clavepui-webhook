@@ -55,6 +55,10 @@ async function initDb() {
       ALTER TABLE reportes_activos
       ADD COLUMN IF NOT EXISTS hotel_id INTEGER REFERENCES hoteles(id);
     `);
+    await client.query(`
+      ALTER TABLE reportes_activos
+      ADD COLUMN IF NOT EXISTS hotel_id INTEGER REFERENCES hoteles(id);
+    `);
     // Tabla de auditoría: registro legal de todas las interacciones
     await client.query(`
       CREATE TABLE IF NOT EXISTS logs_auditoria (
