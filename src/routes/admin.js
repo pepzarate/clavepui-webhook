@@ -50,4 +50,35 @@ router.post('/admin/hoteles', async (req, res) => {
     }
 });
 
+/**
+ * POST /admin/limpiar-pruebas
+ * Marca todos los registros de prueba como sin_reporte.
+ * Usar solo durante desarrollo — eliminar antes de entrega final.
+ */
+router.post('/admin/limpiar-pruebas', async (req, res) => {
+    const adminToken = req.headers['x-admin-token'];
+
+    if (!adminToken || adminToken !== process.env.ADMIN_TOKEN) {
+        return res.status(401).json({ error: 'No autorizado' });
+    }
+
+    try {
+        const result = await pool.query(
+            `UPDATE check_ins 
+       SET estado_pui   = 'sin_reporte',
+           intentos_pui = 0,
+           ultimo_error = null
+       WHERE estado_pui IN ('pendiente', 'error')
+       RETURNING id`
+        );
+
+        return res.status(200).json({
+            message: `${result.rowCount} registros actualizados`,
+        });
+
+    } catch (err) {
+        return res.status(500).json({ error: 'Error interno' });
+    }
+});
+
 module.exports = router;
