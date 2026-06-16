@@ -13,6 +13,7 @@ const desactivarRoutes = require('./routes/desactivar');
 const adminRoutes = require('./routes/admin');
 const checkInsRoutes = require('./routes/checkIns');
 const usuariosRoutes = require('./routes/usuarios');
+const reportesRoutes = require('./routes/reportes');
 
 const app = express();
 
@@ -108,6 +109,7 @@ app.use('/', desactivarRoutes);           // POST /desactivar-reporte
 app.use('/', adminRoutes);
 app.use('/', checkInsRoutes);
 app.use('/', usuariosRoutes);
+app.use('/', reportesRoutes);
 
 // ── 8. Health check — Railway lo monitorea cada 30 segundos ──────────────────
 app.get('/health', (req, res) => {
