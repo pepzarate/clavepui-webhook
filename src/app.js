@@ -49,8 +49,8 @@ app.use((req, res, next) => {
 app.use((req, res, next) => {
     const allowedOrigins = [
         'https://plataformadebusqueda.gob.mx',
-        'https://clavepui-frontend.vercel.app/',
-        'https://app.clavepui.com',
+        'https://api.clavepui.com',
+        'https://clavepui-frontend.vercel.app',
         'http://localhost:4321',
         'http://localhost:4322',
         'http://localhost:4323',
