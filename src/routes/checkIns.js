@@ -55,6 +55,7 @@ router.post('/check-ins', requireHotel, async (req, res) => {
         telefono,
         correo,
         registrado_por,
+        numero_habitacion,
     } = req.body;
 
     // Validar CURP obligatoria
@@ -78,11 +79,11 @@ router.post('/check-ins', requireHotel, async (req, res) => {
         // Guardar check-in en BD
         const result = await pool.query(
             `INSERT INTO check_ins
-        (hotel_id, curp, nombre, primer_apellido, segundo_apellido,
-         fecha_nacimiento, lugar_nacimiento, sexo_asignado,
-         telefono, correo, registrado_por, estado_pui)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'pendiente')
-       RETURNING *`,
+                (hotel_id, curp, nombre, primer_apellido, segundo_apellido,
+                fecha_nacimiento, lugar_nacimiento, sexo_asignado,
+                telefono, correo, registrado_por, numero_habitacion, estado_pui)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'pendiente')
+            RETURNING *`,
             [
                 req.hotel.id,
                 curp,
@@ -95,6 +96,7 @@ router.post('/check-ins', requireHotel, async (req, res) => {
                 telefono,
                 correo,
                 registrado_por || 'recepcion',
+                numero_habitacion || null,
             ]
         );
 
@@ -156,8 +158,9 @@ router.get('/check-ins', requireHotel, async (req, res) => {
       SELECT
         id, curp, nombre, primer_apellido, segundo_apellido,
         fecha_nacimiento, lugar_nacimiento, sexo_asignado,
+        numero_habitacion,
         fecha_checkin, estado_pui, intentos_pui, registrado_por
-      FROM check_ins
+        FROM check_ins
       WHERE hotel_id = $1
     `;
         const params = [req.hotel.id];

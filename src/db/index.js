@@ -95,6 +95,11 @@ async function initDb() {
     `);
 
     await client.query(`
+      ALTER TABLE check_ins
+      ADD COLUMN IF NOT EXISTS numero_habitacion TEXT;
+    `);
+
+    await client.query(`
       CREATE INDEX IF NOT EXISTS idx_check_ins_hotel_id
       ON check_ins(hotel_id);
     `);

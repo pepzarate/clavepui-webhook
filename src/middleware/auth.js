@@ -35,4 +35,31 @@ function requireAuth(req, res, next) {
     }
 }
 
-module.exports = { requireAuth };
+/**
+ * Middleware que verifica que el usuario tenga rol de gerente.
+ */
+function requireGerente(req, res, next) {
+    const authHeader = req.headers['authorization'];
+
+    if (!authHeader?.startsWith('Bearer ')) {
+        return res.status(401).json({ error: 'Token requerido' });
+    }
+
+    const token = authHeader.split(' ')[1];
+
+    try {
+        const decoded = jwt.verify(token, config.jwt.secret);
+
+        if (decoded.rol !== 'gerente') {
+            return res.status(403).json({ error: 'Acceso restringido a gerentes' });
+        }
+
+        req.usuario = decoded;
+        next();
+
+    } catch (err) {
+        return res.status(401).json({ error: 'Token inválido o expirado' });
+    }
+}
+
+module.exports = { requireAuth, requireGerente };
