@@ -230,13 +230,14 @@ router.get('/check-ins/resumen', requireHotel, async (req, res) => {
     try {
         const result = await pool.query(
             `SELECT
-         COUNT(*)                                          AS total,
-         COUNT(*) FILTER (WHERE estado_pui = 'enviado')   AS enviados,
-         COUNT(*) FILTER (WHERE estado_pui = 'pendiente') AS pendientes,
-         COUNT(*) FILTER (WHERE estado_pui = 'error')     AS errores
-       FROM check_ins
-       WHERE hotel_id = $1
-         AND DATE(fecha_checkin AT TIME ZONE 'America/Mexico_City') = CURRENT_DATE AT TIME ZONE 'America/Mexico_City'`,
+                COUNT(*)                                              AS total,
+                COUNT(*) FILTER (WHERE estado_pui = 'enviado')       AS enviados,
+                COUNT(*) FILTER (WHERE estado_pui = 'pendiente')     AS pendientes,
+                COUNT(*) FILTER (WHERE estado_pui = 'error')         AS errores,
+                COUNT(*) FILTER (WHERE estado_pui = 'sin_reporte')   AS sin_reporte
+            FROM check_ins
+            WHERE hotel_id = $1
+                AND DATE(fecha_checkin AT TIME ZONE 'America/Mexico_City') = CURRENT_DATE AT TIME ZONE 'America/Mexico_City'`,
             [req.hotel.id]
         );
 
@@ -249,6 +250,7 @@ router.get('/check-ins/resumen', requireHotel, async (req, res) => {
             enviados: Number.parseInt(row.enviados),
             pendientes: Number.parseInt(row.pendientes),
             errores: Number.parseInt(row.errores),
+            sin_reporte: Number.parseInt(row.sin_reporte),
         });
 
     } catch (err) {
