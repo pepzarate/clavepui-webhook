@@ -125,12 +125,13 @@ router.post('/check-ins', requireHotel, async (req, res) => {
                 curp: enmascararCURP(curp),
                 nombre: checkIn.nombre,
                 primer_apellido: checkIn.primer_apellido,
+                segundo_apellido: checkIn.segundo_apellido,
                 fecha_checkin: checkIn.fecha_checkin,
                 estado_pui: checkIn.estado_pui,
-                // Datos extraídos automáticamente de la CURP
                 fecha_nacimiento: fechaNac,
                 lugar_nacimiento: lugarNac,
                 sexo_asignado: sexo,
+                numero_habitacion: checkIn.numero_habitacion,
             },
         });
 
