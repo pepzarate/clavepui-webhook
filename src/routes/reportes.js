@@ -48,13 +48,13 @@ router.get('/reportes/pdf', requireHotel, async (req, res) => {
         let paramIdx = 2;
 
         if (fecha_inicio) {
-            query += ` AND DATE(fecha_checkin) >= $${paramIdx}`;
+            query += ` AND DATE(fecha_checkin AT TIME ZONE 'America/Mexico_City') >= $${paramIdx}`;
             params.push(fecha_inicio);
             paramIdx++;
         }
 
         if (fecha_fin) {
-            query += ` AND DATE(fecha_checkin) <= $${paramIdx}`;
+            query += ` AND DATE(fecha_checkin AT TIME ZONE 'America/Mexico_City') <= $${paramIdx}`;
             params.push(fecha_fin);
             paramIdx++;
         }
@@ -183,9 +183,9 @@ router.get('/reportes/pdf', requireHotel, async (req, res) => {
 
         // Encabezado de tabla
         const tableTop = doc.y;
-        const colWidths = [30, 130, 140, 80, 70, 65];
-        const colX = [50, 80, 210, 350, 430, 500];
-        const headers = ['#', 'CURP', 'Nombre', 'Fecha', 'Estado', 'Hora'];
+        const colWidths = [25, 120, 120, 70, 65, 55, 55];
+        const colX = [50, 75, 195, 315, 385, 440, 500];
+        const headers = ['#', 'CURP', 'Nombre', 'Fecha', 'Hab.', 'Estado', 'Hora'];
 
         doc.rect(50, tableTop, 515, 20).fill('#1b305b');
 
@@ -244,11 +244,14 @@ router.get('/reportes/pdf', requireHotel, async (req, res) => {
             doc.fontSize(7.5).fillColor('#374151')
                 .text(fecha, colX[3], rowY + 5, { width: colWidths[3] });
 
+            doc.fontSize(7.5).fillColor('#374151').font('Helvetica')
+                .text(ci.numero_habitacion || '—', colX[4], rowY + 5, { width: colWidths[4] });
+
             doc.fontSize(7.5).fillColor(color).font('Helvetica-Bold')
-                .text(estadoTextos[ci.estado_pui] ?? ci.estado_pui, colX[4], rowY + 5, { width: colWidths[4] });
+                .text(estadoTextos[ci.estado_pui] ?? ci.estado_pui, colX[5], rowY + 5, { width: colWidths[5] });
 
             doc.fontSize(7.5).fillColor('#374151').font('Helvetica')
-                .text(hora, colX[5], rowY + 5, { width: colWidths[5] });
+                .text(hora, colX[6], rowY + 5, { width: colWidths[6] });
 
             rowY += 18;
         });

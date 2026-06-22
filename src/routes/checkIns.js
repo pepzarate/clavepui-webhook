@@ -168,7 +168,7 @@ router.get('/check-ins', requireHotel, async (req, res) => {
         let paramIdx = 2;
 
         if (fecha) {
-            query += ` AND DATE(fecha_checkin) = $${paramIdx}`;
+            query += ` AND DATE(fecha_checkin AT TIME ZONE 'America/Mexico_City') = $${paramIdx}`;
             params.push(fecha);
             paramIdx++;
         }
@@ -192,10 +192,22 @@ router.get('/check-ins', requireHotel, async (req, res) => {
         }));
 
         // Contar totales para paginación
-        const countResult = await pool.query(
-            `SELECT COUNT(*) FROM check_ins WHERE hotel_id = $1`,
-            [req.hotel.id]
-        );
+        let countQuery = `SELECT COUNT(*) FROM check_ins WHERE hotel_id = $1`;
+        const countParams = [req.hotel.id];
+        let countParamIdx = 2;
+
+        if (fecha) {
+            countQuery += ` AND DATE(fecha_checkin AT TIME ZONE 'America/Mexico_City') = $${countParamIdx}`;
+            countParams.push(fecha);
+            countParamIdx++;
+        }
+
+        if (estado) {
+            countQuery += ` AND estado_pui = $${countParamIdx}`;
+            countParams.push(estado);
+        }
+
+        const countResult = await pool.query(countQuery, countParams);
 
         return res.status(200).json({
             total: Number.parseInt(countResult.rows[0].count),
@@ -224,7 +236,7 @@ router.get('/check-ins/resumen', requireHotel, async (req, res) => {
          COUNT(*) FILTER (WHERE estado_pui = 'error')     AS errores
        FROM check_ins
        WHERE hotel_id = $1
-         AND DATE(fecha_checkin) = CURRENT_DATE`,
+         AND DATE(fecha_checkin AT TIME ZONE 'America/Mexico_City') = CURRENT_DATE AT TIME ZONE 'America/Mexico_City'`,
             [req.hotel.id]
         );
 
@@ -257,21 +269,22 @@ router.get('/check-ins/export', requireHotel, async (req, res) => {
       SELECT
         id, curp, nombre, primer_apellido, segundo_apellido,
         fecha_nacimiento, lugar_nacimiento, sexo_asignado,
+        numero_habitacion,
         fecha_checkin, estado_pui, registrado_por
-      FROM check_ins
+        FROM check_ins
       WHERE hotel_id = $1
     `;
         const params = [req.hotel.id];
         let paramIdx = 2;
 
         if (fecha_inicio) {
-            query += ` AND DATE(fecha_checkin) >= $${paramIdx}`;
+            query += ` AND DATE(fecha_checkin AT TIME ZONE 'America/Mexico_City') >= $${paramIdx}`;
             params.push(fecha_inicio);
             paramIdx++;
         }
 
         if (fecha_fin) {
-            query += ` AND DATE(fecha_checkin) <= $${paramIdx}`;
+            query += ` AND DATE(fecha_checkin AT TIME ZONE 'America/Mexico_City') <= $${paramIdx}`;
             params.push(fecha_fin);
             paramIdx++;
         }
@@ -283,19 +296,20 @@ router.get('/check-ins/export', requireHotel, async (req, res) => {
         // Generar CSV
         const headers = [
             'ID', 'CURP', 'Nombre', 'Primer Apellido', 'Segundo Apellido',
-            'Fecha Nacimiento', 'Lugar Nacimiento', 'Sexo',
+            'Fecha Nacimiento', 'Lugar Nacimiento', 'Sexo', 'Habitación',
             'Fecha Check-in', 'Estado PUI', 'Registrado Por'
         ].join(',');
 
         const rows = result.rows.map(row => [
             row.id,
-            row.curp, // CURP completa en el export para evidencia legal
+            row.curp,
             row.nombre || '',
             row.primer_apellido || '',
             row.segundo_apellido || '',
             row.fecha_nacimiento || '',
             row.lugar_nacimiento || '',
             row.sexo_asignado || '',
+            row.numero_habitacion || '',
             row.fecha_checkin,
             row.estado_pui,
             row.registrado_por || '',

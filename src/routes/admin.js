@@ -81,4 +81,24 @@ router.post('/admin/limpiar-pruebas', async (req, res) => {
     }
 });
 
+router.post('/admin/limpiar-reportes-prueba', async (req, res) => {
+    const adminToken = req.headers['x-admin-token'];
+    if (!adminToken || adminToken !== process.env.ADMIN_TOKEN) {
+        return res.status(401).json({ error: 'No autorizado' });
+    }
+
+    try {
+        const result = await pool.query(
+            `DELETE FROM reportes_activos
+       WHERE curp = $1`,
+            ['GOCJ900115HDFNRL08']
+        );
+        return res.status(200).json({
+            message: `${result.rowCount} reportes de prueba eliminados`
+        });
+    } catch (err) {
+        return res.status(500).json({ error: 'Error interno' });
+    }
+});
+
 module.exports = router;
