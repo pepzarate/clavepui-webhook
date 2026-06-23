@@ -40,9 +40,9 @@ router.get('/reportes/pdf', requireHotel, async (req, res) => {
       SELECT
         id, curp, nombre, primer_apellido, segundo_apellido,
         fecha_nacimiento, lugar_nacimiento, sexo_asignado,
+        numero_habitacion,
         fecha_checkin, estado_pui, registrado_por
-      FROM check_ins
-      WHERE hotel_id = $1
+        FROM check_ins
     `;
         const params = [req.hotel.id];
         let paramIdx = 2;
@@ -211,17 +211,13 @@ router.get('/reportes/pdf', requireHotel, async (req, res) => {
             const nombre = [ci.nombre, ci.primer_apellido, ci.segundo_apellido]
                 .filter(Boolean).join(' ') || '—';
 
-            const fecha = new Date(ci.fecha_checkin).toLocaleDateString('es-MX');
+            const fecha = new Date(ci.fecha_checkin).toLocaleDateString('es-MX', {
+                timeZone: 'America/Mexico_City',
+            });
             const hora = new Date(ci.fecha_checkin).toLocaleTimeString('es-MX', {
                 hour: '2-digit', minute: '2-digit',
+                timeZone: 'America/Mexico_City',
             });
-
-            const estadoColors = {
-                enviado: '#065f46',
-                sin_reporte: '#1e40af',
-                pendiente: '#92400e',
-                error: '#991b1b',
-            };
 
             const estadoTextos = {
                 enviado: 'Enviado',
@@ -230,26 +226,40 @@ router.get('/reportes/pdf', requireHotel, async (req, res) => {
                 error: 'Error',
             };
 
+            const estadoColors = {
+                enviado: '#065f46',
+                sin_reporte: '#1e40af',
+                pendiente: '#92400e',
+                error: '#991b1b',
+            };
+
             const color = estadoColors[ci.estado_pui] ?? '#374151';
 
+            // #
             doc.fontSize(7.5).fillColor('#374151').font('Helvetica')
                 .text(String(idx + 1), colX[0], rowY + 5, { width: colWidths[0] });
 
+            // CURP
             doc.fontSize(7).fillColor('#374151').font('Helvetica-Oblique')
                 .text(ci.curp, colX[1], rowY + 5, { width: colWidths[1] });
 
+            // Nombre
             doc.fontSize(7.5).fillColor('#374151').font('Helvetica')
-                .text(nombre.substring(0, 22), colX[2], rowY + 5, { width: colWidths[2] });
+                .text(nombre.substring(0, 18), colX[2], rowY + 5, { width: colWidths[2] });
 
+            // Fecha
             doc.fontSize(7.5).fillColor('#374151')
                 .text(fecha, colX[3], rowY + 5, { width: colWidths[3] });
 
+            // Habitación
             doc.fontSize(7.5).fillColor('#374151').font('Helvetica')
                 .text(ci.numero_habitacion || '—', colX[4], rowY + 5, { width: colWidths[4] });
 
+            // Estado
             doc.fontSize(7.5).fillColor(color).font('Helvetica-Bold')
                 .text(estadoTextos[ci.estado_pui] ?? ci.estado_pui, colX[5], rowY + 5, { width: colWidths[5] });
 
+            // Hora
             doc.fontSize(7.5).fillColor('#374151').font('Helvetica')
                 .text(hora, colX[6], rowY + 5, { width: colWidths[6] });
 

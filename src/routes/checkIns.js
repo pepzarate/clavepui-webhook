@@ -237,7 +237,8 @@ router.get('/check-ins/resumen', requireHotel, async (req, res) => {
                 COUNT(*) FILTER (WHERE estado_pui = 'sin_reporte')   AS sin_reporte
             FROM check_ins
             WHERE hotel_id = $1
-                AND DATE(fecha_checkin AT TIME ZONE 'America/Mexico_City') = CURRENT_DATE AT TIME ZONE 'America/Mexico_City'`,
+                AND DATE(fecha_checkin AT TIME ZONE 'America/Mexico_City') =
+                    CURRENT_DATE AT TIME ZONE 'America/Mexico_City'`,
             [req.hotel.id]
         );
 
@@ -312,7 +313,10 @@ router.get('/check-ins/export', requireHotel, async (req, res) => {
             row.lugar_nacimiento || '',
             row.sexo_asignado || '',
             row.numero_habitacion || '',
-            row.fecha_checkin,
+            new Date(row.fecha_checkin).toLocaleDateString('es-MX', {
+                timeZone: 'America/Mexico_City',
+                day: '2-digit', month: '2-digit', year: 'numeric',
+            }),
             row.estado_pui,
             row.registrado_por || '',
         ].join(','));
