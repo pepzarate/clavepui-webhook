@@ -37,13 +37,14 @@ router.get('/reportes/pdf', requireHotel, async (req, res) => {
 
     try {
         let query = `
-      SELECT
-        id, curp, nombre, primer_apellido, segundo_apellido,
-        fecha_nacimiento, lugar_nacimiento, sexo_asignado,
-        numero_habitacion,
-        fecha_checkin, estado_pui, registrado_por
-        FROM check_ins
-    `;
+            SELECT
+                id, curp, nombre, primer_apellido, segundo_apellido,
+                fecha_nacimiento, lugar_nacimiento, sexo_asignado,
+                numero_habitacion,
+                fecha_checkin, estado_pui, registrado_por
+            FROM check_ins
+            WHERE hotel_id = $1
+            `;
         const params = [req.hotel.id];
         let paramIdx = 2;
 
