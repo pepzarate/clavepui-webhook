@@ -228,34 +228,35 @@ router.get('/check-ins', requireHotel, async (req, res) => {
  */
 router.get('/check-ins/resumen', requireHotel, async (req, res) => {
     try {
-        `SELECT
-            COUNT(*)                                              AS total,
-            COUNT(*) FILTER (WHERE estado_pui = 'enviado')       AS enviados,
-            COUNT(*) FILTER (WHERE estado_pui = 'pendiente')     AS pendientes,
-            COUNT(*) FILTER (WHERE estado_pui = 'error')         AS errores,
-            COUNT(*) FILTER (WHERE estado_pui = 'sin_reporte')   AS sin_reporte
-        FROM check_ins
-        WHERE hotel_id = $1
-            AND DATE(fecha_checkin AT TIME ZONE 'America/Mexico_City') = $2`,
+        const result = await pool.query(
+            `SELECT
+                COUNT(*)                                              AS total,
+                COUNT(*) FILTER (WHERE estado_pui = 'enviado')       AS enviados,
+                COUNT(*) FILTER (WHERE estado_pui = 'pendiente')     AS pendientes,
+                COUNT(*) FILTER (WHERE estado_pui = 'error')         AS errores,
+                COUNT(*) FILTER (WHERE estado_pui = 'sin_reporte')   AS sin_reporte
+            FROM check_ins
+            WHERE hotel_id = $1
+                AND DATE(fecha_checkin AT TIME ZONE 'America/Mexico_City') = $2`,
             [req.hotel.id, new Date().toLocaleDateString('en-CA', { timeZone: 'America/Mexico_City' })]
         );
 
-const row = result.rows[0];
+        const row = result.rows[0];
 
-return res.status(200).json({
-    fecha: new Date().toISOString().split('T')[0],
-    hotel: req.hotel.nombre,
-    total: Number.parseInt(row.total),
-    enviados: Number.parseInt(row.enviados),
-    pendientes: Number.parseInt(row.pendientes),
-    errores: Number.parseInt(row.errores),
-    sin_reporte: Number.parseInt(row.sin_reporte),
-});
+        return res.status(200).json({
+            fecha: new Date().toISOString().split('T')[0],
+            hotel: req.hotel.nombre,
+            total: Number.parseInt(row.total),
+            enviados: Number.parseInt(row.enviados),
+            pendientes: Number.parseInt(row.pendientes),
+            errores: Number.parseInt(row.errores),
+            sin_reporte: Number.parseInt(row.sin_reporte),
+        });
 
     } catch (err) {
-    logger.error('Error obteniendo resumen', { error: err.message });
-    return res.status(500).json({ error: 'Error interno del servidor' });
-}
+        logger.error('Error obteniendo resumen', { error: err.message });
+        return res.status(500).json({ error: 'Error interno del servidor' });
+    }
 });
 
 /**
