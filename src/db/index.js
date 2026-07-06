@@ -32,6 +32,11 @@ async function initDb() {
       );
     `);
 
+    await client.query(`
+      ALTER TABLE hoteles
+      ADD COLUMN IF NOT EXISTS gov_pui_clave TEXT;
+    `);
+
     // Tabla principal: reportes activos recibidos desde la PUI
     await client.query(`
       CREATE TABLE IF NOT EXISTS reportes_activos (

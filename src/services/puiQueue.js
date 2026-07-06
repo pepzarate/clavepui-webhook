@@ -79,11 +79,22 @@ const puiWorker = new Worker(
             // Hay reporte activo — notificar coincidencia a la PUI
             for (const reporte of reportes.rows) {
                 // 1. Obtener token de la PUI
+                const hotelResult = await pool.query(
+                    `SELECT gov_pui_clave FROM hoteles WHERE id = $1`,
+                    [checkIn.hotel_id]
+                );
+
+                if (hotelResult.rowCount === 0 || !hotelResult.rows[0].gov_pui_clave) {
+                    throw new Error(`Hotel ${checkIn.hotel_id} no tiene gov_pui_clave configurada`);
+                }
+
+                const govClave = hotelResult.rows[0].gov_pui_clave;
+
                 const loginRes = await axios.post(
                     'https://www.api.plataformadebusqueda.gob.mx/api/2_3_0/login',
                     {
                         institucion_id: checkIn.rfc_hotel,
-                        clave: process.env.PUI_API_CLAVE,
+                        clave: govClave,
                     },
                     { timeout: 10000 }
                 );

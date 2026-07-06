@@ -101,4 +101,40 @@ router.post('/admin/limpiar-reportes-prueba', async (req, res) => {
     }
 });
 
+/**
+ * POST /admin/hoteles/:id/gov-clave
+ * Guarda la clave gubernamental (Punto 4 del portal PUI) para un hotel.
+ */
+router.post('/admin/hoteles/:id/gov-clave', async (req, res) => {
+    const adminToken = req.headers['x-admin-token'];
+    if (!adminToken || adminToken !== process.env.ADMIN_TOKEN) {
+        return res.status(401).json({ error: 'No autorizado' });
+    }
+
+    const { id } = req.params;
+    const { gov_pui_clave } = req.body;
+
+    if (!gov_pui_clave) {
+        return res.status(400).json({ error: 'gov_pui_clave es obligatoria' });
+    }
+
+    try {
+        const result = await pool.query(
+            `UPDATE hoteles SET gov_pui_clave = $1 WHERE id = $2 RETURNING id, nombre`,
+            [gov_pui_clave, id]
+        );
+
+        if (result.rowCount === 0) {
+            return res.status(404).json({ error: 'Hotel no encontrado' });
+        }
+
+        logger.info('Clave gubernamental actualizada', { hotel_id: id });
+        return res.status(200).json({ message: 'Clave guardada correctamente', hotel: result.rows[0] });
+
+    } catch (err) {
+        logger.error('Error guardando clave gubernamental', { error: err.message });
+        return res.status(500).json({ error: 'Error interno' });
+    }
+});
+
 module.exports = router;
