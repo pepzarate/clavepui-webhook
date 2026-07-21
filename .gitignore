@@ -4,3 +4,4 @@ node_modules/
 logs/
 .DS_Storenode_modules/
 .scannerwork/
+checkins_export.csv
