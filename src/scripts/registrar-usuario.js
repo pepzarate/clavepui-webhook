@@ -1,13 +1,6 @@
 require('dotenv').config();
-const { Pool } = require('pg');
 const bcrypt = require('bcrypt');
-
-const pool = new Pool({
-    connectionString: process.env.DATABASE_URL,
-    ssl: process.env.NODE_ENV === 'production'
-        ? { rejectUnauthorized: false }
-        : false,
-});
+const { pool, withAdminContext } = require('../db');
 
 // ── Edita estos datos ─────────────────────────────────────
 const USUARIO = {
@@ -20,11 +13,12 @@ const USUARIO = {
 // ─────────────────────────────────────────────────────────
 
 async function registrar() {
-    const client = await pool.connect();
     try {
         const hash = await bcrypt.hash(USUARIO.password, 12);
 
-        const result = await client.query(
+        // usuarios tiene RLS forzado — insertar/actualizar cualquier hotel_id
+        // requiere el contexto admin, igual que POST /auth/usuarios.
+        const result = await withAdminContext((client) => client.query(
             `INSERT INTO usuarios (hotel_id, nombre, email, password_hash, rol)
        VALUES ($1, $2, $3, $4, $5)
        ON CONFLICT (email) DO UPDATE SET
@@ -33,7 +27,7 @@ async function registrar() {
          activo        = TRUE
        RETURNING id, nombre, email, rol`,
             [USUARIO.hotel_id, USUARIO.nombre, USUARIO.email, hash, USUARIO.rol]
-        );
+        ));
 
         const u = result.rows[0];
         console.log('\n✅ Usuario registrado:');
@@ -47,8 +41,7 @@ async function registrar() {
     } catch (err) {
         console.error('❌ Error:', err.message);
     } finally {
-        client.release();
-        pool.end();
+        await pool.end();
     }
 }
 
