@@ -16,6 +16,13 @@ const config = {
 
     db: {
         connectionString: process.env.DATABASE_URL,
+        // Rol restringido (sin SUPERUSER/BYPASSRLS) para queries tenant-scoped —
+        // las policies de RLS solo protegen de verdad si este rol no puede
+        // saltárselas. En local, DATABASE_URL ya apunta a un rol sin privilegios
+        // de superusuario, así que reusarlo como fallback es seguro; en Railway
+        // DATABASE_URL es el rol "postgres" (superusuario) y es obligatorio
+        // configurar DATABASE_URL_TENANT aparte.
+        tenantConnectionString: process.env.DATABASE_URL_TENANT || process.env.DATABASE_URL,
         ssl: process.env.NODE_ENV === 'production'
             ? { rejectUnauthorized: false }
             : false,

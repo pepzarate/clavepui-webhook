@@ -1,7 +1,7 @@
 const express = require('express');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
-const { pool } = require('../db');
+const { withAdminContext } = require('../db');
 const { logger } = require('../middleware/logger');
 const config = require('../config');
 
@@ -22,7 +22,9 @@ router.post('/auth/login', async (req, res) => {
     }
 
     try {
-        const result = await pool.query(
+        // Búsqueda cross-tenant por email: todavía no sabemos el hotel_id
+        // en este punto del login, así que corre con contexto admin.
+        const result = await withAdminContext((client) => client.query(
             `SELECT
          u.id, u.nombre, u.email, u.password_hash, u.rol,
          u.hotel_id,
@@ -35,7 +37,7 @@ router.post('/auth/login', async (req, res) => {
          AND u.activo = TRUE
          AND h.activo = TRUE`,
             [email.toLowerCase().trim()]
-        );
+        ));
 
         if (result.rowCount === 0) {
             logger.warn('Login fallido — usuario no encontrado', {
@@ -139,7 +141,7 @@ router.post('/auth/usuarios', async (req, res) => {
     try {
         const password_hash = await bcrypt.hash(password, 12);
 
-        const result = await pool.query(
+        const result = await withAdminContext((client) => client.query(
             `INSERT INTO usuarios (hotel_id, nombre, email, password_hash, rol)
        VALUES ($1, $2, $3, $4, $5)
        ON CONFLICT (email) DO UPDATE SET
@@ -149,7 +151,7 @@ router.post('/auth/usuarios', async (req, res) => {
          activo        = TRUE
        RETURNING id, nombre, email, rol, hotel_id`,
             [hotel_id, nombre, email.toLowerCase().trim(), password_hash, rol]
-        );
+        ));
 
         const usuario = result.rows[0];
 

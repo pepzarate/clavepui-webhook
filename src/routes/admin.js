@@ -1,5 +1,5 @@
 const express = require('express');
-const { pool } = require('../db');
+const { pool, withAdminContext } = require('../db');
 const { logger } = require('../middleware/logger');
 
 const router = express.Router();
@@ -63,14 +63,14 @@ router.post('/admin/limpiar-pruebas', async (req, res) => {
     }
 
     try {
-        const result = await pool.query(
-            `UPDATE check_ins 
+        const result = await withAdminContext((client) => client.query(
+            `UPDATE check_ins
        SET estado_pui   = 'sin_reporte',
            intentos_pui = 0,
            ultimo_error = null
        WHERE estado_pui IN ('pendiente', 'error')
        RETURNING id`
-        );
+        ));
 
         return res.status(200).json({
             message: `${result.rowCount} registros actualizados`,
@@ -88,11 +88,11 @@ router.post('/admin/limpiar-reportes-prueba', async (req, res) => {
     }
 
     try {
-        const result = await pool.query(
+        const result = await withAdminContext((client) => client.query(
             `DELETE FROM reportes_activos
        WHERE curp = $1`,
             ['GOCJ900115HDFNRL08']
-        );
+        ));
         return res.status(200).json({
             message: `${result.rowCount} reportes de prueba eliminados`
         });

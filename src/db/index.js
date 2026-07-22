@@ -14,6 +14,42 @@ pool.on('error', (err) => {
   logger.error('Error en pool de PostgreSQL', { error: err.message });
 });
 
+// Pool separado para queries tenant-scoped (withHotelContext). Debe conectar
+// con un rol SIN privilegios de superusuario/BYPASSRLS — si no, FORCE ROW
+// LEVEL SECURITY no tiene ningún efecto y el aislamiento no se aplica de
+// verdad (ver verificarRolTenantSeguro()).
+const tenantPool = new Pool({
+  connectionString: config.db.tenantConnectionString,
+  ssl: config.db.ssl,
+  max: 10,
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 5000,
+});
+
+tenantPool.on('error', (err) => {
+  logger.error('Error en tenantPool de PostgreSQL', { error: err.message });
+});
+
+/**
+ * Verifica en cada arranque que el rol usado para queries tenant-scoped no
+ * pueda saltarse RLS. Si puede (superusuario o BYPASSRLS), el aislamiento
+ * multi-tenant es una ilusión aunque las policies existan — se corta el
+ * arranque en vez de servir tráfico sin protección real.
+ */
+async function verificarRolTenantSeguro() {
+  const { rows } = await tenantPool.query(
+    `SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user;`
+  );
+  const rol = rows[0];
+  if (!rol || rol.rolsuper || rol.rolbypassrls) {
+    throw new Error(
+      'El rol de tenantPool puede saltarse Row Level Security ' +
+      '(rolsuper o rolbypassrls = true). Configura DATABASE_URL_TENANT ' +
+      'apuntando a un rol restringido — ver clavepui_tenant.'
+    );
+  }
+}
+
 /**
  * Crea las tablas si no existen.
  * Se ejecuta una vez al arrancar el servidor.
@@ -142,6 +178,28 @@ async function initDb() {
       ON usuarios(email);
     `);
 
+    // ── Row Level Security — aislamiento multi-tenant a nivel de BD ─────────
+    // FORCE es necesario porque el rol de conexión es dueño de las tablas,
+    // y Postgres exime a los dueños de RLS por defecto salvo que se fuerce.
+    for (const tabla of ['check_ins', 'reportes_activos', 'usuarios']) {
+      await client.query(`ALTER TABLE ${tabla} ENABLE ROW LEVEL SECURITY;`);
+      await client.query(`ALTER TABLE ${tabla} FORCE ROW LEVEL SECURITY;`);
+      await client.query(`DROP POLICY IF EXISTS hotel_isolation ON ${tabla};`);
+      await client.query(`
+        CREATE POLICY hotel_isolation ON ${tabla}
+        USING (
+          current_setting('app.bypass_tenant_rls', true) = 'on'
+          OR hotel_id = NULLIF(current_setting('app.current_hotel_id', true), '')::int
+        )
+        WITH CHECK (
+          current_setting('app.bypass_tenant_rls', true) = 'on'
+          OR hotel_id = NULLIF(current_setting('app.current_hotel_id', true), '')::int
+        );
+      `);
+    }
+
+    await verificarRolTenantSeguro();
+
     logger.info('Base de datos inicializada correctamente');
   } catch (err) {
     logger.error('Error inicializando base de datos', { error: err.message });
@@ -151,4 +209,52 @@ async function initDb() {
   }
 }
 
-module.exports = { pool, initDb };
+/**
+ * Ejecuta fn(client) dentro de una transacción con el contexto de tenant
+ * seteado vía set_config(..., true) — local a la transacción, nunca se
+ * filtra entre requests que reusan la misma conexión del pool.
+ * Las policies de RLS de check_ins/usuarios/reportes_activos exigen este
+ * contexto (o el de withAdminContext) para devolver filas.
+ */
+async function withHotelContext(hotelId, fn) {
+  const client = await tenantPool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(
+      `SELECT set_config('app.current_hotel_id', $1, true)`,
+      [String(hotelId)]
+    );
+    const result = await fn(client);
+    await client.query('COMMIT');
+    return result;
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Igual que withHotelContext pero para operaciones legítimamente
+ * cross-tenant (rutas /admin/*, alta de usuarios, login por email).
+ * Protegido río arriba por x-admin-token o por ser el único punto de
+ * entrada donde el hotel_id todavía no se conoce.
+ */
+async function withAdminContext(fn) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(`SELECT set_config('app.bypass_tenant_rls', 'on', true)`);
+    const result = await fn(client);
+    await client.query('COMMIT');
+    return result;
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+module.exports = { pool, tenantPool, initDb, withHotelContext, withAdminContext };

@@ -1,5 +1,5 @@
 const express = require('express');
-const { pool } = require('../db');
+const { pool, withHotelContext } = require('../db');
 const { logger } = require('../middleware/logger');
 const { validarFormatoCURP, parsearCURP, enmascararCURP } = require('../utils/curp');
 const { encolarNotificacionPUI } = require('../services/puiQueue');
@@ -77,7 +77,7 @@ router.post('/check-ins', requireHotel, async (req, res) => {
 
     try {
         // Guardar check-in en BD
-        const result = await pool.query(
+        const result = await withHotelContext(req.hotel.id, (client) => client.query(
             `INSERT INTO check_ins
                 (hotel_id, curp, nombre, primer_apellido, segundo_apellido,
                 fecha_nacimiento, lugar_nacimiento, sexo_asignado,
@@ -98,7 +98,7 @@ router.post('/check-ins', requireHotel, async (req, res) => {
                 registrado_por || 'recepcion',
                 numero_habitacion || null,
             ]
-        );
+        ));
 
         const checkIn = result.rows[0];
 
@@ -183,14 +183,6 @@ router.get('/check-ins', requireHotel, async (req, res) => {
         query += ` LIMIT $${paramIdx} OFFSET $${paramIdx + 1}`;
         params.push(Number.parseInt(limit), Number.parseInt(offset));
 
-        const result = await pool.query(query, params);
-
-        // Enmascarar CURPs en la respuesta
-        const checkins = result.rows.map(row => ({
-            ...row,
-            curp: enmascararCURP(row.curp),
-        }));
-
         // Contar totales para paginación
         let countQuery = `SELECT COUNT(*) FROM check_ins WHERE hotel_id = $1`;
         const countParams = [req.hotel.id];
@@ -207,7 +199,17 @@ router.get('/check-ins', requireHotel, async (req, res) => {
             countParams.push(estado);
         }
 
-        const countResult = await pool.query(countQuery, countParams);
+        const { result, countResult } = await withHotelContext(req.hotel.id, async (client) => {
+            const result = await client.query(query, params);
+            const countResult = await client.query(countQuery, countParams);
+            return { result, countResult };
+        });
+
+        // Enmascarar CURPs en la respuesta
+        const checkins = result.rows.map(row => ({
+            ...row,
+            curp: enmascararCURP(row.curp),
+        }));
 
         return res.status(200).json({
             total: Number.parseInt(countResult.rows[0].count),
@@ -228,7 +230,7 @@ router.get('/check-ins', requireHotel, async (req, res) => {
  */
 router.get('/check-ins/resumen', requireHotel, async (req, res) => {
     try {
-        const result = await pool.query(
+        const result = await withHotelContext(req.hotel.id, (client) => client.query(
             `SELECT
                 COUNT(*)                                              AS total,
                 COUNT(*) FILTER (WHERE estado_pui = 'enviado')       AS enviados,
@@ -239,7 +241,7 @@ router.get('/check-ins/resumen', requireHotel, async (req, res) => {
             WHERE hotel_id = $1
                 AND DATE(fecha_checkin AT TIME ZONE 'America/Mexico_City') = $2`,
             [req.hotel.id, new Date().toLocaleDateString('en-CA', { timeZone: 'America/Mexico_City' })]
-        );
+        ));
 
         const row = result.rows[0];
 
@@ -293,7 +295,7 @@ router.get('/check-ins/export', requireHotel, async (req, res) => {
 
         query += ` ORDER BY fecha_checkin DESC`;
 
-        const result = await pool.query(query, params);
+        const result = await withHotelContext(req.hotel.id, (client) => client.query(query, params));
 
         // Generar CSV
         const headers = [
@@ -346,14 +348,14 @@ router.get('/check-ins/export', requireHotel, async (req, res) => {
  */
 router.get('/reportes-activos', requireHotel, async (req, res) => {
     try {
-        const result = await pool.query(
+        const result = await withHotelContext(req.hotel.id, (client) => client.query(
             `SELECT id, curp, nombre, primer_apellido,
               recibido_en, activo
        FROM reportes_activos
        WHERE hotel_id = $1 AND activo = TRUE
        ORDER BY recibido_en DESC`,
             [req.hotel.id]
-        );
+        ));
 
         return res.status(200).json({ reportes: result.rows });
     } catch (err) {
@@ -368,7 +370,7 @@ router.get('/reportes-activos', requireHotel, async (req, res) => {
  */
 router.get('/reportes-historial', requireHotel, async (req, res) => {
     try {
-        const result = await pool.query(
+        const result = await withHotelContext(req.hotel.id, (client) => client.query(
             `SELECT id, curp, nombre, primer_apellido,
               recibido_en, activo
        FROM reportes_activos
@@ -376,7 +378,7 @@ router.get('/reportes-historial', requireHotel, async (req, res) => {
        ORDER BY recibido_en DESC
        LIMIT 50`,
             [req.hotel.id]
-        );
+        ));
 
         return res.status(200).json({ reportes: result.rows });
     } catch (err) {

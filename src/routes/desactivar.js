@@ -1,5 +1,5 @@
 const express = require('express');
-const { pool } = require('../db');
+const { withHotelContext } = require('../db');
 const { requireAuth } = require('../middleware/auth');
 const { logger } = require('../middleware/logger');
 
@@ -25,14 +25,18 @@ router.post('/desactivar-reporte', requireAuth, async (req, res) => {
         });
     }
 
+    // hotel_id viene del JWT generado en /login — RLS impide que este UPDATE
+    // toque un reporte de otro hotel aunque el id coincida.
+    const hotel_id = req.puiAuth.hotel_id;
+
     try {
-        const result = await pool.query(
+        const result = await withHotelContext(hotel_id, (client) => client.query(
             `UPDATE reportes_activos
        SET activo = FALSE
        WHERE id = $1
        RETURNING id`,
             [id]
-        );
+        ));
 
         if (result.rowCount === 0) {
             logger.warn('Desactivar reporte no encontrado', {

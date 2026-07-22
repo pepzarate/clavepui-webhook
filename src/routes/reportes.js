@@ -1,6 +1,6 @@
 const express = require('express');
 const PDFDocument = require('pdfkit');
-const { pool } = require('../db');
+const { pool, withHotelContext } = require('../db');
 const { logger } = require('../middleware/logger');
 
 const router = express.Router();
@@ -62,7 +62,7 @@ router.get('/reportes/pdf', requireHotel, async (req, res) => {
 
         query += ` ORDER BY fecha_checkin DESC`;
 
-        const result = await pool.query(query, params);
+        const result = await withHotelContext(req.hotel.id, (client) => client.query(query, params));
         const checkins = result.rows;
 
         // ── Generar PDF ───────────────────────────────────────

@@ -1,5 +1,5 @@
 const express = require('express');
-const { pool } = require('../db');
+const { withHotelContext } = require('../db');
 const { requireAuth } = require('../middleware/auth');
 const { logger } = require('../middleware/logger');
 
@@ -61,7 +61,7 @@ router.post('/activar-reporte', requireAuth, async (req, res) => {
     const hotel_id = req.puiAuth.hotel_id;
 
     try {
-        await pool.query(
+        await withHotelContext(hotel_id, (client) => client.query(
             `INSERT INTO reportes_activos
         (id, curp, nombre, primer_apellido, segundo_apellido,
          fecha_nacimiento, fecha_desaparicion, lugar_nacimiento,
@@ -78,7 +78,7 @@ router.post('/activar-reporte', requireAuth, async (req, res) => {
                 JSON.stringify(req.body),
                 hotel_id,
             ]
-        );
+        ));
 
         logger.info('Reporte activado', {
             type: 'activar_reporte',

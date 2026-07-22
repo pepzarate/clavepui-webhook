@@ -1,6 +1,6 @@
 const { Queue, Worker } = require('bullmq');
 const axios = require('axios');
-const { pool } = require('../db');
+const { pool, withHotelContext } = require('../db');
 const { logger } = require('../middleware/logger');
 
 // Configuración de conexión a Redis
@@ -53,21 +53,24 @@ const puiWorker = new Worker(
         });
 
         try {
-            // Buscar si hay reportes activos que coincidan con esta CURP
-            const reportes = await pool.query(
+            // Buscar si hay reportes activos que coincidan con esta CURP.
+            // Sin filtro de hotel_id en el texto de la query a propósito: la
+            // policy de RLS (contexto seteado abajo) es la que garantiza que
+            // solo se vean reportes del mismo hotel del check-in.
+            const reportes = await withHotelContext(checkIn.hotel_id, (client) => client.query(
                 `SELECT id, curp FROM reportes_activos
          WHERE curp = $1 AND activo = TRUE`,
                 [checkIn.curp]
-            );
+            ));
 
             if (reportes.rowCount === 0) {
                 // No hay reporte activo para esta CURP — no notificar
                 // Marcar como enviado porque no hay nada que reportar
-                await pool.query(
+                await withHotelContext(checkIn.hotel_id, (client) => client.query(
                     `UPDATE check_ins SET estado_pui = 'sin_reporte'
            WHERE id = $1`,
                     [checkIn.id]
-                );
+                ));
 
                 logger.info('Sin reporte activo para esta CURP — sin acción', {
                     type: 'worker_pui',
@@ -132,23 +135,23 @@ const puiWorker = new Worker(
             }
 
             // 3. Actualizar estado
-            await pool.query(
+            await withHotelContext(checkIn.hotel_id, (client) => client.query(
                 `UPDATE check_ins
          SET estado_pui   = 'enviado',
              intentos_pui = intentos_pui + 1
          WHERE id = $1`,
                 [checkIn.id]
-            );
+            ));
 
         } catch (err) {
-            await pool.query(
+            await withHotelContext(checkIn.hotel_id, (client) => client.query(
                 `UPDATE check_ins
          SET estado_pui   = 'error',
              intentos_pui = intentos_pui + 1,
              ultimo_error = $2
          WHERE id = $1`,
                 [checkIn.id, err.message]
-            );
+            ));
 
             logger.error('Error notificando a PUI', {
                 type: 'pui_error',
