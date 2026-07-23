@@ -36,6 +36,9 @@ function auditLogger(req, res, next) {
     // Enmascarar datos sensibles antes de loguear
     if (requestBody.clave) requestBody.clave = '***';
     if (requestBody.curp) requestBody.curp = requestBody.curp.substring(0, 4) + '***';
+    if (requestBody.password) requestBody.password = '***';
+    if (requestBody.pui_clave) requestBody.pui_clave = '***';
+    if (requestBody.gov_pui_clave) requestBody.gov_pui_clave = '***';
 
     // Interceptar res.json para loguear la respuesta
     const originalJson = res.json.bind(res);

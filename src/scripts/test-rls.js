@@ -49,11 +49,14 @@ async function main() {
 
     console.log('\n── Preparando datos de prueba ──────────────────────────\n');
 
+    // El pui_clave aquí solo se usa si el hotel no existe aún localmente
+    // (obtenerOCrearHotel busca primero por RFC) — un valor de prueba
+    // genérico es suficiente, no hace falta el pui_clave real del hotel.
     const isabelId = await obtenerOCrearHotel(
-        'HOTEL ISABEL SA DE CV', 'HIS410415V37', 'IsabelPUI2026!Sec'
+        'HOTEL ISABEL SA DE CV', 'HIS410415V37', 'RLSTEST-HIS410415V37-KEY'
     );
     const metropolId = await obtenerOCrearHotel(
-        'COMPAÑIA HOTELERA EL AGUILA SA DE CV', 'HAG600912A21', 'MetropolPUI2026!Sec'
+        'COMPAÑIA HOTELERA EL AGUILA SA DE CV', 'HAG600912A21', 'RLSTEST-HAG600912A21-KEY'
     );
     console.log(`Hotel Isabel   id=${isabelId}`);
     console.log(`Hotel Metropol id=${metropolId}`);

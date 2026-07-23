@@ -1,11 +1,10 @@
 /**
  * Script para registrar un nuevo hotel en la BD.
- * Uso: node src/scripts/registrar-hotel.js
+ * Uso: node src/scripts/registrar-hotel.js "<nombre>" "<rfc>" "<pui_clave>"
  */
 
 require('dotenv').config();
 const { Pool } = require('pg');
-const crypto = require('crypto');
 
 const pool = new Pool({
     connectionString: process.env.DATABASE_URL,
@@ -14,15 +13,18 @@ const pool = new Pool({
         : false,
 });
 
-// ── Datos del hotel a registrar — edita estos valores ─────────────────────────
-const HOTEL = {
-    nombre: 'HOTEL ISABEL SA DE CV',
-    rfc: 'HIS410415V37',
-    // La clave debe tener 16-20 chars, mayúscula, número y char especial
-    // Esta es la clave que el representante legal registra en el portal PUI
-    pui_clave: 'IsabelPUI2026!Sec',
-};
-// ─────────────────────────────────────────────────────────────────────────────
+const [, , nombre, rfc, pui_clave] = process.argv;
+
+const HOTEL = { nombre, rfc, pui_clave };
+
+if (!HOTEL.nombre || !HOTEL.rfc || !HOTEL.pui_clave) {
+    console.error(
+        '\n❌ Uso: node src/scripts/registrar-hotel.js "<nombre>" "<rfc>" "<pui_clave>"\n' +
+        '   pui_clave: 16-20 chars, mayúscula, número y char especial —\n' +
+        '   es la clave que el representante legal registra en el portal PUI.\n'
+    );
+    process.exit(1);
+}
 
 async function registrar() {
     const client = await pool.connect();

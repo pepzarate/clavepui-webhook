@@ -1,16 +1,23 @@
+/**
+ * Uso: node src/scripts/registrar-usuario.js <hotel_id> "<nombre>" <email> <password> [rol]
+ * rol por defecto: recepcionista
+ */
+
 require('dotenv').config();
 const bcrypt = require('bcrypt');
 const { pool, withAdminContext } = require('../db');
 
-// ── Edita estos datos ─────────────────────────────────────
-const USUARIO = {
-    hotel_id: 1,
-    nombre: 'Recepcionista Hotel Isabel',
-    email: 'recepcion@hotelisabel.mx',
-    password: 'HotelIsabel2026!',
-    rol: 'recepcionista',
-};
-// ─────────────────────────────────────────────────────────
+const [, , hotel_id, nombre, email, password, rol = 'recepcionista'] = process.argv;
+
+const USUARIO = { hotel_id: Number.parseInt(hotel_id), nombre, email, password, rol };
+
+if (!USUARIO.hotel_id || !USUARIO.nombre || !USUARIO.email || !USUARIO.password) {
+    console.error(
+        '\n❌ Uso: node src/scripts/registrar-usuario.js <hotel_id> "<nombre>" <email> <password> [rol]\n' +
+        '   rol por defecto: recepcionista (o pasa "gerente")\n'
+    );
+    process.exit(1);
+}
 
 async function registrar() {
     try {
