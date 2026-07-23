@@ -52,6 +52,7 @@ app.use((req, res, next) => {
         'https://plataformadebusqueda.gob.mx',
         'https://api.clavepui.com',
         'https://clavepui-frontend.vercel.app',
+        'https://app.clavepui.com',
         'http://localhost:4321',
         'http://localhost:4322',
         'http://localhost:4323',
