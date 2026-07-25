@@ -141,6 +141,17 @@ async function initDb() {
     `);
 
     await client.query(`
+      ALTER TABLE check_ins
+      ADD COLUMN IF NOT EXISTS folio_pms TEXT;
+    `);
+
+    await client.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_check_ins_folio_unico
+      ON check_ins(hotel_id, folio_pms)
+      WHERE folio_pms IS NOT NULL;
+    `);
+
+    await client.query(`
       CREATE INDEX IF NOT EXISTS idx_check_ins_hotel_id
       ON check_ins(hotel_id);
     `);

@@ -56,6 +56,7 @@ router.post('/check-ins', requireHotel, async (req, res) => {
         correo,
         registrado_por,
         numero_habitacion,
+        folio_pms,
     } = req.body;
 
     // Validar CURP obligatoria
@@ -76,31 +77,55 @@ router.post('/check-ins', requireHotel, async (req, res) => {
     const sexo = sexo_asignado || datosCURP?.sexoAsignado;
 
     try {
-        // Guardar check-in en BD
-        const result = await withHotelContext(req.hotel.id, (client) => client.query(
-            `INSERT INTO check_ins
-                (hotel_id, curp, nombre, primer_apellido, segundo_apellido,
-                fecha_nacimiento, lugar_nacimiento, sexo_asignado,
-                telefono, correo, registrado_por, numero_habitacion, estado_pui)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'pendiente')
-            RETURNING *`,
-            [
-                req.hotel.id,
-                curp,
-                nombre,
-                primer_apellido,
-                segundo_apellido,
-                fechaNac,
-                lugarNac,
-                sexo,
-                telefono,
-                correo,
-                registrado_por || 'recepcion',
-                numero_habitacion || null,
-            ]
-        ));
+        const { checkIn, folioDuplicado, curpDuplicadaHoy } = await withHotelContext(req.hotel.id, async (client) => {
+            if (folio_pms) {
+                const folioExistente = await client.query(
+                    `SELECT 1 FROM check_ins WHERE hotel_id = $1 AND folio_pms = $2`,
+                    [req.hotel.id, folio_pms]
+                );
+                if (folioExistente.rowCount > 0) {
+                    return { checkIn: null, folioDuplicado: true, curpDuplicadaHoy: false };
+                }
+            }
 
-        const checkIn = result.rows[0];
+            const curpHoy = await client.query(
+                `SELECT 1 FROM check_ins
+         WHERE hotel_id = $1 AND curp = $2
+           AND DATE(fecha_checkin AT TIME ZONE 'America/Mexico_City') = $3`,
+                [req.hotel.id, curp, new Date().toLocaleDateString('en-CA', { timeZone: 'America/Mexico_City' })]
+            );
+
+            // Guardar check-in en BD
+            const result = await client.query(
+                `INSERT INTO check_ins
+                    (hotel_id, curp, nombre, primer_apellido, segundo_apellido,
+                    fecha_nacimiento, lugar_nacimiento, sexo_asignado,
+                    telefono, correo, registrado_por, numero_habitacion, folio_pms, estado_pui)
+                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'pendiente')
+                RETURNING *`,
+                [
+                    req.hotel.id,
+                    curp,
+                    nombre,
+                    primer_apellido,
+                    segundo_apellido,
+                    fechaNac,
+                    lugarNac,
+                    sexo,
+                    telefono,
+                    correo,
+                    registrado_por || 'recepcion',
+                    numero_habitacion || null,
+                    folio_pms || null,
+                ]
+            );
+
+            return { checkIn: result.rows[0], folioDuplicado: false, curpDuplicadaHoy: curpHoy.rowCount > 0 };
+        });
+
+        if (folioDuplicado) {
+            return res.status(409).json({ error: 'Folio ya registrado para este hotel' });
+        }
 
         // Encolar notificación a la PUI de forma asíncrona
         await encolarNotificacionPUI({
@@ -120,6 +145,7 @@ router.post('/check-ins', requireHotel, async (req, res) => {
 
         return res.status(201).json({
             message: 'Check-in registrado correctamente',
+            aviso_curp_duplicada: curpDuplicadaHoy,
             checkin: {
                 id: checkIn.id,
                 curp: enmascararCURP(curp),
@@ -132,6 +158,7 @@ router.post('/check-ins', requireHotel, async (req, res) => {
                 lugar_nacimiento: lugarNac,
                 sexo_asignado: sexo,
                 numero_habitacion: checkIn.numero_habitacion,
+                folio_pms: checkIn.folio_pms,
             },
         });
 
@@ -159,7 +186,7 @@ router.get('/check-ins', requireHotel, async (req, res) => {
       SELECT
         id, curp, nombre, primer_apellido, segundo_apellido,
         fecha_nacimiento, lugar_nacimiento, sexo_asignado,
-        numero_habitacion,
+        numero_habitacion, folio_pms,
         fecha_checkin, estado_pui, intentos_pui, registrado_por
         FROM check_ins
       WHERE hotel_id = $1
@@ -273,7 +300,7 @@ router.get('/check-ins/export', requireHotel, async (req, res) => {
       SELECT
         id, curp, nombre, primer_apellido, segundo_apellido,
         fecha_nacimiento, lugar_nacimiento, sexo_asignado,
-        numero_habitacion,
+        numero_habitacion, folio_pms,
         fecha_checkin, estado_pui, registrado_por
         FROM check_ins
       WHERE hotel_id = $1
@@ -300,7 +327,7 @@ router.get('/check-ins/export', requireHotel, async (req, res) => {
         // Generar CSV
         const headers = [
             'ID', 'CURP', 'Nombre', 'Primer Apellido', 'Segundo Apellido',
-            'Fecha Nacimiento', 'Lugar Nacimiento', 'Sexo', 'Habitación',
+            'Fecha Nacimiento', 'Lugar Nacimiento', 'Sexo', 'Habitación', 'Folio',
             'Fecha Check-in', 'Estado PUI', 'Registrado Por'
         ].join(',');
 
@@ -314,6 +341,7 @@ router.get('/check-ins/export', requireHotel, async (req, res) => {
             row.lugar_nacimiento || '',
             row.sexo_asignado || '',
             row.numero_habitacion || '',
+            row.folio_pms || '',
             new Date(row.fecha_checkin).toLocaleDateString('es-MX', {
                 timeZone: 'America/Mexico_City',
                 day: '2-digit', month: '2-digit', year: 'numeric',
