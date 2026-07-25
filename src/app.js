@@ -2,9 +2,9 @@ const express = require('express');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const config = require('./config');
-require('./services/puiQueue');
+const { puiQueue } = require('./services/puiQueue');
 const { logger, auditLogger } = require('./middleware/logger');
-const { initDb } = require('./db');
+const { initDb, pool } = require('./db');
 
 // Rutas
 const authRoutes = require('./routes/auth');
@@ -14,6 +14,7 @@ const adminRoutes = require('./routes/admin');
 const checkInsRoutes = require('./routes/checkIns');
 const usuariosRoutes = require('./routes/usuarios');
 const reportesRoutes = require('./routes/reportes');
+const hotelesRoutes = require('./routes/hoteles');
 
 const app = express();
 
@@ -111,6 +112,7 @@ app.use('/', adminRoutes);
 app.use('/', checkInsRoutes);
 app.use('/', usuariosRoutes);
 app.use('/', reportesRoutes);
+app.use('/', hotelesRoutes);
 
 // ── 8. Health check — Railway lo monitorea cada 30 segundos ──────────────────
 app.get('/health', (req, res) => {
@@ -120,6 +122,31 @@ app.get('/health', (req, res) => {
         timestamp: new Date().toISOString(),
         env: config.nodeEnv,
     });
+});
+
+/**
+ * GET /health/estado
+ * Chequeo más profundo (DB + cola de Redis) para el indicador de estado
+ * del sistema en el top-bar del frontend. Separado de /health porque ese
+ * lo monitorea Railway cada 30s y no debe depender de servicios externos.
+ */
+app.get('/health/estado', async (req, res) => {
+    const conTimeout = (promesa, ms) => Promise.race([
+        promesa,
+        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), ms)),
+    ]);
+
+    const db = await conTimeout(pool.query('SELECT 1'), 3000)
+        .then(() => 'ok')
+        .catch(() => 'error');
+
+    const cola = await conTimeout(puiQueue.client.then((client) => client.ping()), 3000)
+        .then(() => 'ok')
+        .catch(() => 'error');
+
+    const operativo = db === 'ok' && cola === 'ok';
+
+    return res.status(200).json({ operativo, db, cola });
 });
 
 // ── 9. Métodos no permitidos — requisito PUI ─────────────────────────────────
