@@ -31,6 +31,15 @@ const config = {
     server: {
         baseUrl: process.env.BASE_URL || 'http://localhost:3000',
     },
+
+    webPush: {
+        publicKey: process.env.VAPID_PUBLIC_KEY,
+        privateKey: process.env.VAPID_PRIVATE_KEY,
+        // mailto de contacto requerido por el estándar VAPID, no un email
+        // que reciba correos — los navegadores solo lo usan si necesitan
+        // contactar al operador del servicio push.
+        subject: process.env.VAPID_SUBJECT || 'mailto:soporte@clavepui.com',
+    },
 };
 
 // Validar variables críticas al arrancar

@@ -2,6 +2,8 @@ const { Queue, Worker } = require('bullmq');
 const axios = require('axios');
 const { pool, withHotelContext } = require('../db');
 const { logger } = require('../middleware/logger');
+const { enmascararCURP } = require('../utils/curp');
+const { notificarGerentes } = require('./webPush');
 
 // Configuración de conexión a Redis
 const connection = {
@@ -142,6 +144,17 @@ const puiWorker = new Worker(
          WHERE id = $1`,
                 [checkIn.id]
             ));
+
+            // 4. Alertar a los gerentes del hotel — coincidencia con persona buscada
+            notificarGerentes(checkIn.hotel_id, {
+                title: 'Alerta PUI — coincidencia detectada',
+                body: `CURP ${enmascararCURP(checkIn.curp)} coincide con un reporte activo de búsqueda.`,
+            }).catch((err) => {
+                logger.error('Error enviando alertas push de coincidencia PUI', {
+                    error: err.message,
+                    hotel_id: checkIn.hotel_id,
+                });
+            });
 
         } catch (err) {
             await withHotelContext(checkIn.hotel_id, (client) => client.query(

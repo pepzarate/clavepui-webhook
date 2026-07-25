@@ -24,6 +24,7 @@
     "pdfkit": "^0.19.1",
     "pg": "^8.21.0",
     "uuid": "^14.0.0",
+    "web-push": "^3.6.7",
     "winston": "^3.19.0"
   },
   "devDependencies": {
