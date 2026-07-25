@@ -228,6 +228,20 @@ async function initDb() {
       ON push_subscriptions(hotel_id);
     `);
 
+    // En producción, DATABASE_URL (dueño de las tablas, usado para crearlas
+    // arriba) y DATABASE_URL_TENANT (clavepui_tenant, usado por
+    // withHotelContext) son roles DISTINTOS — Postgres no le da a
+    // clavepui_tenant ningún permiso automático sobre tablas creadas por
+    // otro rol. Sin este GRANT explícito, toda tabla tenant nueva falla en
+    // producción con "permission denied" apenas withHotelContext la toca,
+    // aunque en local pase inadvertido porque ahí ambos roles suelen ser el
+    // mismo (DATABASE_URL_TENANT no está seteado → hace fallback a
+    // DATABASE_URL). Nos pasó de verdad con huespedes_frecuentes y
+    // push_subscriptions — ver commit de este fix.
+    const { rowCount: tenantRoleExiste } = await client.query(
+      `SELECT 1 FROM pg_roles WHERE rolname = 'clavepui_tenant'`
+    );
+
     // ── Row Level Security — aislamiento multi-tenant a nivel de BD ─────────
     // FORCE es necesario porque el rol de conexión es dueño de las tablas,
     // y Postgres exime a los dueños de RLS por defecto salvo que se fuerce.
@@ -246,6 +260,10 @@ async function initDb() {
           OR hotel_id = NULLIF(current_setting('app.current_hotel_id', true), '')::int
         );
       `);
+
+      if (tenantRoleExiste) {
+        await client.query(`GRANT SELECT, INSERT, UPDATE, DELETE ON ${tabla} TO clavepui_tenant;`);
+      }
     }
 
     await verificarRolTenantSeguro();
