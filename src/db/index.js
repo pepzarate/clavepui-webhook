@@ -266,6 +266,17 @@ async function initDb() {
       }
     }
 
+    // GRANT en una tabla NO incluye la secuencia de su columna SERIAL —
+    // sin esto, INSERT falla con "permission denied for sequence ..._id_seq"
+    // aunque el GRANT sobre la tabla esté bien. Nos volvió a pasar en
+    // producción con huespedes_frecuentes/push_subscriptions justo después
+    // de corregir el GRANT de tabla de arriba. "ALL SEQUENCES" cubre
+    // cualquier tabla tenant futura con columna SERIAL sin tener que
+    // adivinar el nombre de cada secuencia una por una.
+    if (tenantRoleExiste) {
+      await client.query(`GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO clavepui_tenant;`);
+    }
+
     await verificarRolTenantSeguro();
 
     logger.info('Base de datos inicializada correctamente');
