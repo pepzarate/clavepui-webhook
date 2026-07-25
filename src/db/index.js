@@ -189,10 +189,32 @@ async function initDb() {
       ON usuarios(email);
     `);
 
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS huespedes_frecuentes (
+        id                SERIAL PRIMARY KEY,
+        hotel_id          INTEGER NOT NULL REFERENCES hoteles(id),
+        curp              TEXT NOT NULL,
+        nombre            TEXT,
+        primer_apellido   TEXT,
+        segundo_apellido  TEXT,
+        fecha_nacimiento  TEXT,
+        lugar_nacimiento  TEXT,
+        sexo_asignado     TEXT,
+        veces_hospedado   INTEGER NOT NULL DEFAULT 1,
+        primera_visita    TIMESTAMPTZ DEFAULT NOW(),
+        ultima_visita     TIMESTAMPTZ DEFAULT NOW()
+      );
+    `);
+
+    await client.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_huespedes_frecuentes_hotel_curp
+      ON huespedes_frecuentes(hotel_id, curp);
+    `);
+
     // ── Row Level Security — aislamiento multi-tenant a nivel de BD ─────────
     // FORCE es necesario porque el rol de conexión es dueño de las tablas,
     // y Postgres exime a los dueños de RLS por defecto salvo que se fuerce.
-    for (const tabla of ['check_ins', 'reportes_activos', 'usuarios']) {
+    for (const tabla of ['check_ins', 'reportes_activos', 'usuarios', 'huespedes_frecuentes']) {
       await client.query(`ALTER TABLE ${tabla} ENABLE ROW LEVEL SECURITY;`);
       await client.query(`ALTER TABLE ${tabla} FORCE ROW LEVEL SECURITY;`);
       await client.query(`DROP POLICY IF EXISTS hotel_isolation ON ${tabla};`);

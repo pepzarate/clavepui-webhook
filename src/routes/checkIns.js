@@ -120,6 +120,21 @@ router.post('/check-ins', requireHotel, async (req, res) => {
                 ]
             );
 
+            // Registrar/actualizar huésped frecuente (para autofill en visitas futuras)
+            await client.query(
+                `INSERT INTO huespedes_frecuentes
+                    (hotel_id, curp, nombre, primer_apellido, segundo_apellido,
+                    fecha_nacimiento, lugar_nacimiento, sexo_asignado)
+                VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+                ON CONFLICT (hotel_id, curp) DO UPDATE SET
+                    veces_hospedado  = huespedes_frecuentes.veces_hospedado + 1,
+                    ultima_visita    = NOW(),
+                    nombre           = COALESCE(EXCLUDED.nombre, huespedes_frecuentes.nombre),
+                    primer_apellido  = COALESCE(EXCLUDED.primer_apellido, huespedes_frecuentes.primer_apellido),
+                    segundo_apellido = COALESCE(EXCLUDED.segundo_apellido, huespedes_frecuentes.segundo_apellido)`,
+                [req.hotel.id, curp, nombre, primer_apellido, segundo_apellido, fechaNac, lugarNac, sexo]
+            );
+
             return { checkIn: result.rows[0], folioDuplicado: false, curpDuplicadaHoy: curpHoy.rowCount > 0 };
         });
 
@@ -366,6 +381,39 @@ router.get('/check-ins/export', requireHotel, async (req, res) => {
 
     } catch (err) {
         logger.error('Error exportando CSV', { error: err.message });
+        return res.status(500).json({ error: 'Error interno del servidor' });
+    }
+});
+
+/**
+ * GET /huespedes/buscar?curp=...
+ * Busca un huésped frecuente por CURP exacta, para autocompletar el
+ * formulario de check-in en visitas recurrentes.
+ */
+router.get('/huespedes/buscar', requireHotel, async (req, res) => {
+    const { curp } = req.query;
+
+    if (!curp || !validarFormatoCURP(String(curp))) {
+        return res.status(400).json({ error: 'CURP inválida' });
+    }
+
+    try {
+        const result = await withHotelContext(req.hotel.id, (client) => client.query(
+            `SELECT curp, nombre, primer_apellido, segundo_apellido,
+              fecha_nacimiento, lugar_nacimiento, sexo_asignado,
+              veces_hospedado, ultima_visita
+       FROM huespedes_frecuentes
+       WHERE hotel_id = $1 AND curp = $2`,
+            [req.hotel.id, curp]
+        ));
+
+        if (result.rowCount === 0) {
+            return res.status(200).json({ encontrado: false });
+        }
+
+        return res.status(200).json({ encontrado: true, huesped: result.rows[0] });
+    } catch (err) {
+        logger.error('Error buscando huésped frecuente', { error: err.message });
         return res.status(500).json({ error: 'Error interno del servidor' });
     }
 });
