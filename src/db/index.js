@@ -228,6 +228,31 @@ async function initDb() {
       ON push_subscriptions(hotel_id);
     `);
 
+    // Auditoría de ediciones a check-ins (solo folio_pms/numero_habitacion
+    // son editables — nunca CURP ni datos de identidad del huésped).
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS check_ins_ediciones (
+        id              SERIAL PRIMARY KEY,
+        check_in_id     INTEGER NOT NULL REFERENCES check_ins(id),
+        hotel_id        INTEGER NOT NULL REFERENCES hoteles(id),
+        campo           TEXT NOT NULL,
+        valor_anterior  TEXT,
+        valor_nuevo     TEXT,
+        editado_por     TEXT NOT NULL,
+        editado_en      TIMESTAMPTZ DEFAULT NOW()
+      );
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_check_ins_ediciones_check_in_id
+      ON check_ins_ediciones(check_in_id);
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_check_ins_ediciones_hotel_id
+      ON check_ins_ediciones(hotel_id);
+    `);
+
     // En producción, DATABASE_URL (dueño de las tablas, usado para crearlas
     // arriba) y DATABASE_URL_TENANT (clavepui_tenant, usado por
     // withHotelContext) son roles DISTINTOS — Postgres no le da a
@@ -245,7 +270,7 @@ async function initDb() {
     // ── Row Level Security — aislamiento multi-tenant a nivel de BD ─────────
     // FORCE es necesario porque el rol de conexión es dueño de las tablas,
     // y Postgres exime a los dueños de RLS por defecto salvo que se fuerce.
-    for (const tabla of ['check_ins', 'reportes_activos', 'usuarios', 'huespedes_frecuentes', 'push_subscriptions']) {
+    for (const tabla of ['check_ins', 'reportes_activos', 'usuarios', 'huespedes_frecuentes', 'push_subscriptions', 'check_ins_ediciones']) {
       await client.query(`ALTER TABLE ${tabla} ENABLE ROW LEVEL SECURITY;`);
       await client.query(`ALTER TABLE ${tabla} FORCE ROW LEVEL SECURITY;`);
       await client.query(`DROP POLICY IF EXISTS hotel_isolation ON ${tabla};`);

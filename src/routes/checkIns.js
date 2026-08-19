@@ -1,6 +1,7 @@
 const express = require('express');
 const { pool, withHotelContext } = require('../db');
 const { logger } = require('../middleware/logger');
+const { requireUsuarioStaff } = require('../middleware/auth');
 const { validarFormatoCURP, parsearCURP, enmascararCURP } = require('../utils/curp');
 const { encolarNotificacionPUI } = require('../services/puiQueue');
 
@@ -179,6 +180,154 @@ router.post('/check-ins', requireHotel, async (req, res) => {
 
     } catch (err) {
         logger.error('Error registrando check-in', { error: err.message });
+        return res.status(500).json({ error: 'Error interno del servidor' });
+    }
+});
+
+/**
+ * POST /check-ins/:id/editar
+ *
+ * Edita folio_pms y/o numero_habitacion de un check-in — nunca CURP,
+ * nombre, apellidos ni ningún otro dato de identidad del huésped.
+ * Solo permitido sobre check-ins del día actual (America/Mexico_City),
+ * sin importar el rol del usuario.
+ *
+ * Se usa POST en vez de PATCH: el middleware global de CORS en app.js
+ * solo declara Access-Control-Allow-Methods: GET, POST, OPTIONS (parte
+ * del endurecimiento de seguridad documentado como requisito PUI) — un
+ * PATCH real desde el navegador fallaría el preflight. Ampliar ese
+ * allowlist es una decisión de alcance mayor que este endpoint, así que
+ * se sigue la convención ya usada en /activar-reporte, /desactivar-reporte,
+ * etc. de rutas de acción con verbo explícito sobre POST.
+ *
+ * Requiere tanto x-hotel-key (requireHotel) como el JWT de sesión del
+ * staff (requireUsuarioStaff) — ambos deben coincidir en el mismo hotel.
+ *
+ * El body solo puede traer folio_pms y/o numero_habitacion — cualquier
+ * otro campo que venga en el body se ignora silenciosamente (no se
+ * rechaza la request por eso).
+ */
+router.post('/check-ins/:id/editar', requireHotel, requireUsuarioStaff, async (req, res) => {
+    const checkInId = Number.parseInt(req.params.id, 10);
+
+    if (!Number.isInteger(checkInId)) {
+        return res.status(400).json({ error: 'ID de check-in inválido' });
+    }
+
+    const camposPermitidos = ['numero_habitacion', 'folio_pms'];
+    const cambios = {};
+    for (const campo of camposPermitidos) {
+        if (Object.prototype.hasOwnProperty.call(req.body, campo)) {
+            cambios[campo] = req.body[campo];
+        }
+    }
+
+    if (Object.keys(cambios).length === 0) {
+        return res.status(400).json({
+            error: 'Debes enviar folio_pms y/o numero_habitacion para editar'
+        });
+    }
+
+    try {
+        const resultado = await withHotelContext(req.hotel.id, async (client) => {
+            const hoyMX = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Mexico_City' });
+
+            // Verificación explícita de hotel_id además de RLS (defensa en
+            // profundidad) y validación de que el check-in es de hoy.
+            const actual = await client.query(
+                `SELECT id, numero_habitacion, folio_pms,
+                    DATE(fecha_checkin AT TIME ZONE 'America/Mexico_City') = $3 AS es_hoy
+                 FROM check_ins
+                 WHERE id = $1 AND hotel_id = $2`,
+                [checkInId, req.hotel.id, hoyMX]
+            );
+
+            if (actual.rowCount === 0) {
+                return { status: 404, error: 'Check-in no encontrado' };
+            }
+
+            const checkIn = actual.rows[0];
+
+            if (!checkIn.es_hoy) {
+                return { status: 403, error: 'Solo se pueden editar check-ins del día actual' };
+            }
+
+            // Misma validación de folio duplicado que Feature 14 aplica en
+            // la creación (POST /check-ins) — no permitir que la edición
+            // introduzca un folio que la creación sí hubiera bloqueado.
+            if (cambios.folio_pms) {
+                const folioExistente = await client.query(
+                    `SELECT 1 FROM check_ins
+                     WHERE hotel_id = $1 AND folio_pms = $2 AND id != $3`,
+                    [req.hotel.id, cambios.folio_pms, checkInId]
+                );
+                if (folioExistente.rowCount > 0) {
+                    return { status: 409, error: 'Folio ya registrado para este hotel' };
+                }
+            }
+
+            const sets = [];
+            const params = [];
+            let idx = 1;
+            for (const campo of camposPermitidos) {
+                if (!(campo in cambios)) continue;
+                sets.push(`${campo} = $${idx}`);
+                params.push(cambios[campo] || null);
+                idx++;
+            }
+            params.push(checkInId);
+
+            const actualizado = await client.query(
+                `UPDATE check_ins SET ${sets.join(', ')} WHERE id = $${idx} RETURNING id, numero_habitacion, folio_pms`,
+                params
+            );
+
+            // Solo se audita cuando el valor realmente cambia — la UI
+            // siempre manda ambos campos aunque el usuario solo haya
+            // tocado uno, y guardar sin cambios no debe generar ruido en
+            // el rastro de auditoría.
+            for (const campo of Object.keys(cambios)) {
+                const valorAnterior = checkIn[campo];
+                const valorNuevo = cambios[campo] || null;
+                if (valorAnterior === valorNuevo) continue;
+
+                await client.query(
+                    `INSERT INTO check_ins_ediciones
+                        (check_in_id, hotel_id, campo, valor_anterior, valor_nuevo, editado_por)
+                     VALUES ($1, $2, $3, $4, $5, $6)`,
+                    [
+                        checkInId,
+                        req.hotel.id,
+                        campo,
+                        valorAnterior,
+                        valorNuevo,
+                        req.usuarioStaff.nombre || req.usuarioStaff.email,
+                    ]
+                );
+            }
+
+            return { checkin: actualizado.rows[0] };
+        });
+
+        if (resultado.error) {
+            return res.status(resultado.status).json({ error: resultado.error });
+        }
+
+        logger.info('Check-in editado', {
+            type: 'check_in_editado',
+            id: checkInId,
+            hotel_id: req.hotel.id,
+            editado_por: req.usuarioStaff.email,
+            campos: Object.keys(cambios),
+        });
+
+        return res.status(200).json({
+            message: 'Check-in actualizado correctamente',
+            checkin: resultado.checkin,
+        });
+
+    } catch (err) {
+        logger.error('Error editando check-in', { error: err.message, id: checkInId });
         return res.status(500).json({ error: 'Error interno del servidor' });
     }
 });
