@@ -76,23 +76,24 @@ app.use((req, res, next) => {
 });
 
 // ── 4. Rate limiting — requisito ciberseguridad PUI ─────────────────────────
+// Límite global por IP, compartido por TODO el tráfico de esa IP (dashboard
+// polling, check-ins, historial, exports, etc. — no solo login). Un hotel
+// activo con varios miembros de staff detrás de la misma IP (NAT) puede
+// generar fácilmente 120-150 requests en 15 minutos sin que nadie esté
+// atacando nada: /health/estado se consulta cada 60s en CUALQUIER pantalla
+// logueada (Layout.astro, ~15 req/15min por pestaña abierta), dashboard.astro
+// además pide resumen+listado cada 60s (~30 req/15min más mientras esa
+// pestaña esté abierta), y sobre eso se suma el trabajo real (check-ins,
+// cargas de historial, exports). 400 deja margen ~3x sobre ese escenario
+// realista de varios miembros de staff activos a la vez.
 const globalLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutos
-    max: 100,
+    max: 400,
     standardHeaders: true,
     legacyHeaders: false,
     handler: (req, res) => {
         logger.warn('Rate limit excedido', { ip: req.ip, url: req.originalUrl });
         res.status(429).json({ error: 'Demasiadas solicitudes, intenta más tarde' });
-    },
-});
-
-const loginLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000,
-    max: 50, // aumentar de 20 a 50
-    handler: (req, res) => {
-        logger.warn('Rate limit login excedido', { ip: req.ip });
-        res.status(429).json({ error: 'Demasiados intentos de autenticación' });
     },
 });
 
@@ -105,7 +106,7 @@ app.use(express.json({ limit: '1mb' }));
 app.use(auditLogger);
 
 // ── 7. Rutas ─────────────────────────────────────────────────────────────────
-app.use('/', loginLimiter, authRoutes);   // POST /login
+app.use('/', authRoutes);                 // POST /login (limitador propio en auth.js)
 app.use('/', activarRoutes);              // POST /activar-reporte
 // POST /activar-reporte-prueba
 app.use('/', desactivarRoutes);           // POST /desactivar-reporte

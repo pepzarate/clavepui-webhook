@@ -1,10 +1,24 @@
 const express = require('express');
 const jwt = require('jsonwebtoken');
+const rateLimit = require('express-rate-limit');
 const config = require('../config');
 const { pool } = require('../db');
 const { logger } = require('../middleware/logger');
 
 const router = express.Router();
+
+// Aplicado directamente sobre la ruta (no vía app.use('/', loginLimiter,
+// authRoutes) en app.js) — ese montaje corría el limitador para CUALQUIER
+// request, no solo POST /login, porque express aplica el middleware al
+// path prefix '/' antes de que el router decida si le pertenece la ruta.
+const loginLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 50,
+    handler: (req, res) => {
+        logger.warn('Rate limit login excedido', { ip: req.ip });
+        res.status(429).json({ error: 'Demasiados intentos de autenticación' });
+    },
+});
 
 /**
  * POST /login
@@ -13,7 +27,7 @@ const router = express.Router();
  * Cada hotel tiene su propia PUI_CLAVE — con ella identificamos
  * a qué tenant pertenece la solicitud.
  */
-router.post('/login', async (req, res) => {
+router.post('/login', loginLimiter, async (req, res) => {
     const { usuario, clave } = req.body;
 
     if (!usuario || !clave) {

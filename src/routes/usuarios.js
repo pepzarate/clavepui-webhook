@@ -1,18 +1,39 @@
 const express = require('express');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
+const rateLimit = require('express-rate-limit');
 const { withAdminContext } = require('../db');
 const { logger } = require('../middleware/logger');
 const config = require('../config');
 
 const router = express.Router();
 
+// Dedicado a este endpoint — antes POST /auth/login caía bajo el
+// globalLimiter compartido con TODO el tráfico de la app (dashboard
+// polling, check-ins, historial, exports...), lo que lo hacía tanto
+// inútil contra fuerza bruta real (se agotaba con tráfico legítimo antes
+// de que un atacante lo notara) como un riesgo de bloquear a staff
+// legítimo. 30/15min por IP: varios miembros de staff pueden compartir la
+// misma IP de hotel (NAT) y equivocar la contraseña alguna vez sin
+// bloquearse, pero sigue acotando fuerza bruta real. Separado del
+// limitador de POST /login (PUI gobierno, en routes/auth.js).
+const staffLoginLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 30,
+    standardHeaders: true,
+    legacyHeaders: false,
+    handler: (req, res) => {
+        logger.warn('Rate limit login de staff excedido', { ip: req.ip });
+        res.status(429).json({ error: 'Demasiados intentos de autenticación' });
+    },
+});
+
 /**
  * POST /auth/login
  * Login para recepcionistas y gerentes del sistema.
  * Diferente al POST /login que es exclusivo para la PUI del gobierno.
  */
-router.post('/auth/login', async (req, res) => {
+router.post('/auth/login', staffLoginLimiter, async (req, res) => {
     const { email, password } = req.body;
 
     if (!email || !password) {
