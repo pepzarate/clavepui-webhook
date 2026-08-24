@@ -335,11 +335,15 @@ router.post('/check-ins/:id/editar', requireHotel, requireUsuarioStaff, async (r
 /**
  * GET /check-ins
  * Lista los check-ins del hotel con filtros opcionales.
- * Soporta: ?fecha=2026-06-12 ?estado=pendiente ?limit=50 ?offset=0
+ * Soporta: ?fecha=2026-06-12 (un solo día) o ?fecha_inicio=...&fecha_fin=...
+ * (rango) ?estado=pendiente ?limit=50 ?offset=0
+ * fecha_inicio/fecha_fin tienen prioridad si vienen junto con fecha.
  */
 router.get('/check-ins', requireHotel, async (req, res) => {
     const {
         fecha,
+        fecha_inicio,
+        fecha_fin,
         estado,
         limit = 50,
         offset = 0,
@@ -358,7 +362,18 @@ router.get('/check-ins', requireHotel, async (req, res) => {
         const params = [req.hotel.id];
         let paramIdx = 2;
 
-        if (fecha) {
+        if (fecha_inicio || fecha_fin) {
+            if (fecha_inicio) {
+                query += ` AND DATE(fecha_checkin AT TIME ZONE 'America/Mexico_City') >= $${paramIdx}`;
+                params.push(fecha_inicio);
+                paramIdx++;
+            }
+            if (fecha_fin) {
+                query += ` AND DATE(fecha_checkin AT TIME ZONE 'America/Mexico_City') <= $${paramIdx}`;
+                params.push(fecha_fin);
+                paramIdx++;
+            }
+        } else if (fecha) {
             query += ` AND DATE(fecha_checkin AT TIME ZONE 'America/Mexico_City') = $${paramIdx}`;
             params.push(fecha);
             paramIdx++;
@@ -379,7 +394,18 @@ router.get('/check-ins', requireHotel, async (req, res) => {
         const countParams = [req.hotel.id];
         let countParamIdx = 2;
 
-        if (fecha) {
+        if (fecha_inicio || fecha_fin) {
+            if (fecha_inicio) {
+                countQuery += ` AND DATE(fecha_checkin AT TIME ZONE 'America/Mexico_City') >= $${countParamIdx}`;
+                countParams.push(fecha_inicio);
+                countParamIdx++;
+            }
+            if (fecha_fin) {
+                countQuery += ` AND DATE(fecha_checkin AT TIME ZONE 'America/Mexico_City') <= $${countParamIdx}`;
+                countParams.push(fecha_fin);
+                countParamIdx++;
+            }
+        } else if (fecha) {
             countQuery += ` AND DATE(fecha_checkin AT TIME ZONE 'America/Mexico_City') = $${countParamIdx}`;
             countParams.push(fecha);
             countParamIdx++;
@@ -417,12 +443,19 @@ router.get('/check-ins', requireHotel, async (req, res) => {
 
 /**
  * GET /check-ins/resumen
- * Resumen del día para el dashboard del gerente.
+ * Resumen de check-ins para el dashboard del gerente.
+ * Sin parámetros: resumen de hoy (comportamiento original, usado por
+ * dashboard.astro). Con ?fecha_inicio=...&fecha_fin=...: resumen del
+ * rango (usado por historial.astro para que el total coincida con la
+ * lista filtrada).
  */
 router.get('/check-ins/resumen', requireHotel, async (req, res) => {
+    const { fecha_inicio, fecha_fin } = req.query;
+    const hoyMX = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Mexico_City' });
+
     try {
-        const result = await withHotelContext(req.hotel.id, (client) => client.query(
-            `SELECT
+        let query = `
+            SELECT
                 COUNT(*)                                              AS total,
                 COUNT(*) FILTER (WHERE estado_pui = 'enviado')       AS enviados,
                 COUNT(*) FILTER (WHERE estado_pui = 'pendiente')     AS pendientes,
@@ -430,14 +463,34 @@ router.get('/check-ins/resumen', requireHotel, async (req, res) => {
                 COUNT(*) FILTER (WHERE estado_pui = 'sin_reporte')   AS sin_reporte
             FROM check_ins
             WHERE hotel_id = $1
-                AND DATE(fecha_checkin AT TIME ZONE 'America/Mexico_City') = $2`,
-            [req.hotel.id, new Date().toLocaleDateString('en-CA', { timeZone: 'America/Mexico_City' })]
-        ));
+        `;
+        const params = [req.hotel.id];
+        let paramIdx = 2;
+
+        if (fecha_inicio || fecha_fin) {
+            if (fecha_inicio) {
+                query += ` AND DATE(fecha_checkin AT TIME ZONE 'America/Mexico_City') >= $${paramIdx}`;
+                params.push(fecha_inicio);
+                paramIdx++;
+            }
+            if (fecha_fin) {
+                query += ` AND DATE(fecha_checkin AT TIME ZONE 'America/Mexico_City') <= $${paramIdx}`;
+                params.push(fecha_fin);
+                paramIdx++;
+            }
+        } else {
+            query += ` AND DATE(fecha_checkin AT TIME ZONE 'America/Mexico_City') = $${paramIdx}`;
+            params.push(hoyMX);
+            paramIdx++;
+        }
+
+        const result = await withHotelContext(req.hotel.id, (client) => client.query(query, params));
 
         const row = result.rows[0];
 
         return res.status(200).json({
-            fecha: new Date().toISOString().split('T')[0],
+            fecha_inicio: fecha_inicio || (fecha_fin ? null : hoyMX),
+            fecha_fin: fecha_fin || (fecha_inicio ? null : hoyMX),
             hotel: req.hotel.nombre,
             total: Number.parseInt(row.total),
             enviados: Number.parseInt(row.enviados),
