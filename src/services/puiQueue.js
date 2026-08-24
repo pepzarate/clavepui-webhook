@@ -10,6 +10,12 @@ const connection = {
     url: process.env.REDIS_URL || 'redis://localhost:6379',
 };
 
+// Feature 18 (alertas push) pausada temporalmente — ver CLAUDE.md.
+// Reactivar: volver a poner esto en true. El flujo de cumplimiento con la
+// PUI (login, notificar-coincidencia, estado_pui = 'enviado') no depende
+// de este flag y sigue corriendo igual esté en true o false.
+const PUSH_NOTIFICATIONS_ENABLED = false;
+
 // Cola de envíos a la PUI
 const puiQueue = new Queue('pui-notificaciones', { connection });
 
@@ -146,15 +152,17 @@ const puiWorker = new Worker(
             ));
 
             // 4. Alertar a los gerentes del hotel — coincidencia con persona buscada
-            notificarGerentes(checkIn.hotel_id, {
-                title: 'Alerta PUI — coincidencia detectada',
-                body: `CURP ${enmascararCURP(checkIn.curp)} coincide con un reporte activo de búsqueda.`,
-            }).catch((err) => {
-                logger.error('Error enviando alertas push de coincidencia PUI', {
-                    error: err.message,
-                    hotel_id: checkIn.hotel_id,
+            if (PUSH_NOTIFICATIONS_ENABLED) {
+                notificarGerentes(checkIn.hotel_id, {
+                    title: 'Alerta PUI — coincidencia detectada',
+                    body: `CURP ${enmascararCURP(checkIn.curp)} coincide con un reporte activo de búsqueda.`,
+                }).catch((err) => {
+                    logger.error('Error enviando alertas push de coincidencia PUI', {
+                        error: err.message,
+                        hotel_id: checkIn.hotel_id,
+                    });
                 });
-            });
+            }
 
         } catch (err) {
             await withHotelContext(checkIn.hotel_id, (client) => client.query(
