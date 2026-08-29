@@ -621,6 +621,47 @@ router.get('/huespedes/buscar', requireHotel, async (req, res) => {
 });
 
 /**
+ * GET /huespedes/buscar-por-nombre?nombre=...
+ * Busca coincidencias parciales (ILIKE) en huésped frecuente por
+ * nombre/apellidos, para que recepción no tenga que pedir la CURP a
+ * alguien que ya se hospedó antes. Devuelve una lista (máx. 10) para que
+ * el frontend pueda desambiguar entre personas con nombre similar — a
+ * diferencia de /huespedes/buscar (CURP exacta, un solo resultado).
+ */
+router.get('/huespedes/buscar-por-nombre', requireHotel, async (req, res) => {
+    const nombre = String(req.query.nombre || '').trim();
+
+    if (nombre.length < 2) {
+        return res.status(400).json({ error: 'Escribe al menos 2 caracteres' });
+    }
+
+    // Escapa los comodines de LIKE (%, _, \) para que el término se
+    // trate como texto literal, no como patrón — mismo criterio de
+    // "no confiar en que el input del usuario sea inocente" que ya
+    // aplicamos en el resto del sistema.
+    const terminoEscapado = nombre.replace(/[\\%_]/g, '\\$&');
+
+    try {
+        const result = await withHotelContext(req.hotel.id, (client) => client.query(
+            `SELECT curp, nombre, primer_apellido, segundo_apellido,
+              fecha_nacimiento, lugar_nacimiento, sexo_asignado,
+              veces_hospedado, ultima_visita
+       FROM huespedes_frecuentes
+       WHERE hotel_id = $1
+         AND CONCAT_WS(' ', nombre, primer_apellido, segundo_apellido) ILIKE $2 ESCAPE '\\'
+       ORDER BY ultima_visita DESC
+       LIMIT 10`,
+            [req.hotel.id, `%${terminoEscapado}%`]
+        ));
+
+        return res.status(200).json({ resultados: result.rows });
+    } catch (err) {
+        logger.error('Error buscando huésped frecuente por nombre', { error: err.message });
+        return res.status(500).json({ error: 'Error interno del servidor' });
+    }
+});
+
+/**
  * GET /reportes-activos
  * Lista los reportes de búsqueda activos recibidos de la PUI.
  */
