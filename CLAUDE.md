@@ -262,6 +262,18 @@ apunta a la causa real (falta de contexto RLS). Cualquier DELETE/UPDATE
 manual a check_ins/usuarios/reportes_activos necesita
 withHotelContext/withAdminContext, o fallará en silencio.
 
+**Lo mismo aplica a SELECT** (nos volvió a pasar el 2026-08-29, ahora
+depurando por `psql` directo): un `SELECT * FROM huespedes_frecuentes
+WHERE ...` corrido a mano contra `DATABASE_URL` (el rol dueño de las
+tablas) devuelve **0 filas siempre**, con datos real presentes, porque
+`FORCE ROW LEVEL SECURITY` también aplica al dueño y ninguna sesión de
+psql cruda tiene seteado `app.current_hotel_id`/`app.bypass_tenant_rls`
+— la policy evalúa a NULL (falso) para toda fila, sin ningún error que
+lo delate. Para depurar por psql a mano hace falta
+`SET app.bypass_tenant_rls = 'on';` antes del SELECT, o mejor, probar
+por el endpoint real (que sí pasa por withHotelContext/withAdminContext)
+en vez de psql directo.
+
 ## Variables de entorno Railway
 PORT=8080
 NODE_ENV=production
