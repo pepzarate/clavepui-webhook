@@ -66,9 +66,13 @@ router.get('/reportes/pdf', requireHotel, async (req, res) => {
         const checkins = result.rows;
 
         // ── Generar PDF ───────────────────────────────────────
+        // bufferPages: true — necesario para poder volver a páginas ya
+        // escritas en el pie de página (switchToPage) sin que PDFKit las
+        // haya descartado ya del buffer interno al llamar addPage().
         const doc = new PDFDocument({
             size: 'LETTER',
             margins: { top: 50, bottom: 50, left: 50, right: 50 },
+            bufferPages: true,
         });
 
         const filename = `reporte_pui_${req.hotel.nombre.replace(/\s+/g, '_')}_${new Date().toISOString().split('T')[0]}.pdf`;
@@ -268,18 +272,34 @@ router.get('/reportes/pdf', requireHotel, async (req, res) => {
         });
 
         // ── Pie de página ─────────────────────────────────────
-        const pageCount = doc.bufferedPageRange().count;
-        for (let i = 0; i < pageCount; i++) {
+        // bufferedPageRange().start NO siempre es 0 (no lo es aquí, ya que
+        // es el índice real de la primera página bufferizada) — iterar con
+        // índices fijos desde 0 revienta switchToPage() en cuanto start > 0.
+        const range = doc.bufferedPageRange();
+        for (let i = range.start; i < range.start + range.count; i++) {
             doc.switchToPage(i);
+
+            // El pie va dentro del margen inferior (page.height - 35, con
+            // margen inferior de 50pt). Con { width } el LineWrapper de
+            // PDFKit calcula su propio límite inferior como
+            // page.height - margins.bottom y, si la Y cae debajo de ese
+            // límite (como aquí, a propósito), interpreta que "no cabe" y
+            // dispara una página nueva en blanco vía continueOnNewPage()
+            // ANTES de escribir el texto — nunca llega a pintarlo en la
+            // página correcta. Bajar el margen a 0 momentáneamente evita
+            // ese autopaginado; se restaura de inmediato después.
+            const bottomMargin = doc.page.margins.bottom;
+            doc.page.margins.bottom = 0;
             doc.fontSize(7)
                 .fillColor('#9ca3af')
                 .font('Helvetica')
                 .text(
-                    `ClavePUI — ${req.hotel.nombre} — Página ${i + 1} de ${pageCount}`,
+                    `ClavePUI — ${req.hotel.nombre} — Página ${i - range.start + 1} de ${range.count}`,
                     50,
                     doc.page.height - 35,
                     { align: 'center', width: 515 }
                 );
+            doc.page.margins.bottom = bottomMargin;
         }
 
         doc.end();
