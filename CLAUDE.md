@@ -10,6 +10,66 @@ https://api.clavepui.com
 npm run dev  (nodemon — puerto 8080)
 Docker Redis: docker start clavepui-redis
 
+## Incidente 2026-09-27 — GET /reportes/pdf tumbaba el proceso en Railway
+
+Reportado en logs de producción: cualquier reporte de más de una
+página hacía crashear el proceso completo de Node (Railway lo
+reiniciaba). Diagnosticado y corregido el 2026-09-28, commits
+`a454030` (causa raíz) y `bff4aa2` (blindaje de respuesta), ambos sobre
+`src/routes/reportes.js`. Sin push todavía — pendiente aprobación.
+
+**Causa raíz (`a454030`)**: el `PDFDocument` se creaba sin
+`bufferPages: true`, así que PDFKit descartaba cada página del buffer
+interno en cuanto se llamaba `addPage()` (solo conservaba la última).
+El pie de página iteraba `for (i = 0; i < pageCount; i++)`  asumiendo
+que `bufferedPageRange().start` siempre es 0 — deja de serlo apenas el
+reporte pasa de una página, y `switchToPage(i)` revienta con
+`"switchToPage(0) out of bounds"` en cuanto `i` apunta a una página ya
+descartada. Fix: `bufferPages: true` + iterar
+`bufferedPageRange().start` hasta `start + count` (nunca desde 0 fijo).
+
+De paso apareció un segundo bug, más sutil, en el mismo pie de
+página: el texto se dibuja en `page.height - 35`, dentro del margen
+inferior de 50pt — eso cae por debajo del límite que PDFKit calcula
+internamente (`page.height - margins.bottom`) para texto con `{
+width }`, así que disparaba paginación automática (`continueOnNewPage`
+vía su `LineWrapper`) y el pie terminaba en una página en blanco de
+más, **incluso en reportes de una sola página** (nunca se notó porque
+no tumbaba nada, solo dejaba un footer mal puesto). Fix: bajar
+`doc.page.margins.bottom` a 0 momentáneamente solo mientras se escribe
+cada pie, restaurarlo de inmediato después.
+
+**Por qué tumbaba el proceso entero, no solo la request (`bff4aa2`)**:
+el `PDFDocument` estaba conectado con `doc.pipe(res)` desde el inicio.
+Cuando el `catch` respondía el 500 tras el crash de arriba, el `doc`
+nunca se cerraba (ni `end()` ni `destroy()`) — seguía intentando
+escribir en una respuesta que el catch ya daba por terminada. Esa
+escritura tardía topaba con `ERR_STREAM_WRITE_AFTER_END` como evento
+`'error'` sin listener, que en Node no es un error cualquiera: revienta
+el proceso completo (coincide exactamente con el log de Railway).
+Fix: armar el PDF completo en memoria (`doc.on('data')` +
+`doc.on('end')`) y responder recién ahí, nunca con `pipe(res)` directo;
+más `doc.on('error')` explícito y una bandera `responded` compartida
+para que catch/`error`/`end` nunca respondan dos veces la misma
+request.
+
+**Grep de otros endpoints con el mismo patrón** (`pipe(res)`/streaming
+en `src/`): ninguno. `GET /check-ins/export` (CSV) arma el string
+completo en memoria y responde con un único `res.send()` — no tiene
+este riesgo, no se tocó.
+
+**Verificación**: reproducido localmente con Postgres real (hotel de
+prueba dedicado, check-ins insertados y borrados en la misma sesión,
+sin tocar los 3 hoteles reales) — el crash exacto de producción
+("switchToPage(0) out of bounds...") se reprodujo con 30+ check-ins de
+un mismo día antes del fix. Tras el fix: PDF completo con numeración
+de página correcta en reportes de 1, 2, 3 y 5+ páginas (confirmado
+decodificando el contenido real del PDF, no solo el código HTTP). Fallo
+simulado a mitad de generación: responde 500 limpio, el proceso sigue
+vivo, y una request normal inmediatamente después sigue funcionando.
+`node src/scripts/test-rls.js` sigue 8/8 sin regresión. Sin cambios al
+diseño visual del PDF ni dependencias nuevas.
+
 ## Feature 18 pausada (2026-08-24) — notificaciones push
 
 Pausa deliberada de alcance acotado (NO un revert como Feature 19 —
