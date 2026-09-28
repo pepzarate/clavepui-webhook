@@ -35,6 +35,11 @@ router.get('/reportes/pdf', requireHotel, async (req, res) => {
         fecha_fin,
     } = req.query;
 
+    // Compartido entre el try, el catch y los listeners async de `doc` para
+    // que nunca se intente responder dos veces (p.ej. doc emite 'error'
+    // después de que el catch ya respondió el throw que lo originó).
+    let responded = false;
+
     try {
         let query = `
             SELECT
@@ -77,9 +82,40 @@ router.get('/reportes/pdf', requireHotel, async (req, res) => {
 
         const filename = `reporte_pui_${req.hotel.nombre.replace(/\s+/g, '_')}_${new Date().toISOString().split('T')[0]}.pdf`;
 
-        res.setHeader('Content-Type', 'application/pdf');
-        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-        doc.pipe(res);
+        // Se arma el PDF completo en memoria en vez de encadenar
+        // doc.pipe(res): así, si algo falla a mitad de la generación, el
+        // catch de abajo todavía puede responder un 500 limpio (headers aún
+        // sin enviar) en lugar de dejar una respuesta a medio enviar. El
+        // reporte cabe perfectamente en memoria (es texto tabular, nunca
+        // imágenes ni adjuntos).
+        const chunks = [];
+        doc.on('data', (chunk) => chunks.push(chunk));
+
+        // 'error' es un evento especial en Node: sin listener, revienta el
+        // proceso entero (justo lo que tumbaba Railway). Con éste, un fallo
+        // interno de PDFKit/del stream también cae en un 500 limpio.
+        doc.on('error', (err) => {
+            logger.error('Error generando PDF (stream)', { error: err.message });
+            if (!responded) {
+                responded = true;
+                if (!res.headersSent) res.status(500).json({ error: 'Error generando el reporte' });
+            }
+        });
+
+        doc.on('end', () => {
+            if (responded) return;
+            responded = true;
+            const pdfBuffer = Buffer.concat(chunks);
+            res.setHeader('Content-Type', 'application/pdf');
+            res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+            res.send(pdfBuffer);
+
+            logger.info('PDF generado', {
+                type: 'reporte_pdf',
+                hotel_id: req.hotel.id,
+                total: checkins.length,
+            });
+        });
 
         // ── Encabezado ────────────────────────────────────────
         doc.rect(0, 0, doc.page.width, 80).fill('#1b305b');
@@ -304,16 +340,13 @@ router.get('/reportes/pdf', requireHotel, async (req, res) => {
 
         doc.end();
 
-        logger.info('PDF generado', {
-            type: 'reporte_pdf',
-            hotel_id: req.hotel.id,
-            total: checkins.length,
-        });
-
     } catch (err) {
         logger.error('Error generando PDF', { error: err.message });
-        if (!res.headersSent) {
-            return res.status(500).json({ error: 'Error generando el reporte' });
+        if (!responded) {
+            responded = true;
+            if (!res.headersSent) {
+                return res.status(500).json({ error: 'Error generando el reporte' });
+            }
         }
     }
 });
