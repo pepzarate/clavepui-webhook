@@ -1,7 +1,8 @@
 # ClavePUI Webhook — Backend
 
 ## Stack
-Node.js 22, Express 4, PostgreSQL 15, Redis 7, BullMQ — Railway
+Node.js 22, Express 5 (`package.json` ^5.2.1; este archivo decía 4 hasta
+2026-10-15), PostgreSQL 15, Redis 7, BullMQ — Railway
 
 ## URL producción
 https://api.clavepui.com
@@ -9,6 +10,71 @@ https://api.clavepui.com
 ## Arrancar en desarrollo
 npm run dev  (nodemon — puerto 8080)
 Docker Redis: docker start clavepui-redis
+
+## Sesión 2026-10-15 — POST /ocr/ine (lectura de INE para el check-in)
+
+Endpoint nuevo para leer CURP y nombre del frente de una INE y PRELLENAR
+el formulario de check-in. **Todavía no lo usa `checkin.astro`**: hoy lo
+usa solo la sección "Flujo check-in" de la página de laboratorio
+`poc-ocr-ine` (frontend). No crea check-ins ni toca la BD.
+
+- **`src/routes/ocr.js`, `POST /ocr/ine`.**
+  - **Auth:** la misma que `POST /check-ins/:id/editar`, o sea
+    `requireHotel` (x-hotel-key) + `requireUsuarioStaff` (JWT de staff).
+    `requireHotel` se reutiliza exportándolo desde `checkIns.js` (solo se
+    agregó el export; el flujo de check-ins no cambió).
+  - **Cuerpo:** la imagen **en binario** (`Content-Type: image/jpeg` o
+    `image/png`), **no multipart**, para no agregar `multer`. Se lee con
+    `express.raw({ limit: '5mb' })` montado solo en esta ruta, y se valida
+    la firma real del archivo (magic bytes), no solo el Content-Type.
+  - **Rate limit:** `ocrIneLimiter`, **60 / 15 min por usuario de staff**
+    (llave `hotel_id:usuario`, no IP). Va montado sobre la ruta y DESPUÉS
+    de la auth, igual que la lección del `loginLimiter`.
+  - **Reenvío:** el mismo buffer se manda a `${OCR_SERVICE_URL}/ocr/ine`
+    (microservicio Python con RapidOCR, `clavepui-frontend/tools/
+    poc-paddleocr`) con el header `X-OCR-Token: OCR_SERVICE_TOKEN` y
+    timeout `OCR_TIMEOUT_MS` (10 s).
+  - **Respuestas:**
+    - 200 `{ curp, nombre, tiempos }`;
+    - 422 `sin_curp` (no se encontró un CURP válido);
+    - 400 `imagen_invalida`;
+    - 413 `imagen_muy_grande`;
+    - 415 `tipo_no_soportado`;
+    - 429 `limite_excedido`;
+    - 503 `ocr_no_disponible` (servicio caído) / `ocr_no_configurado`
+      (faltan variables);
+    - 504 `ocr_timeout`;
+    - 502 `ocr_error` (el servicio respondió error, p. ej. token
+      equivocado).
+    
+    Todas traen un `mensaje` legible para el recepcionista.
+  - **Logs sin datos personales:** solo `hotel_id`, `usuario` (id),
+    `ms`, `curp_valido` (sí/no) y `nombre_coincide` (sí/no/null). En
+    errores, el `resultado`/`codigo`.
+    - Verificado sobre los logs reales de la prueba: 0 CURPs.
+    - `auditLogger` registra `requestBody: {}`, porque copia el body a
+      nivel app, antes de que la ruta lea la imagen.
+- **Verificado en local** con Postgres real (sin Redis: los errores de
+  conexión de BullMQ al arrancar no afectan esta ruta) y el servicio de
+  OCR real, con un JWT de staff de prueba firmado con el `JWT_SECRET`
+  local (sin crear usuarios en la BD):
+  - 401 sin auth, 403 con JWT de otro hotel;
+  - 200 con frame PNG y con recorte JPEG reales (CURP válido + nombre
+    que coincide);
+  - 415, 400 (archivo disfrazado), 413, 422 (imagen sin CURP);
+  - el usuario #61 en 15 min recibe 429 y otro usuario no se ve
+    afectado;
+  - 504 con `OCR_TIMEOUT_MS=50`, 502 con token equivocado, 503 sin
+    variables y 503 con el servicio apagado.
+- **Ojo con los tiempos medidos en WSL:** `performance.now()` de Node
+  usa `CLOCK_MONOTONIC`, que en este WSL2 corre ~6% rápido (ver
+  `clavepui-frontend/CLAUDE.md`), así que `backend_total_ms` sale ~6%
+  alto en local. En Railway no aplica.
+- **Pendiente para producción:** desplegar el servicio de OCR en Railway
+  (red privada junto a este backend) con `OCR_MOTORES=ine` y
+  `OCR_MODO_LAB=0`, y configurar aquí `OCR_SERVICE_URL` (URL interna) y
+  `OCR_SERVICE_TOKEN`. Sin esas dos variables el endpoint responde 503 y
+  el resto de la app funciona igual.
 
 ## Incidente 2026-09-27 — GET /reportes/pdf tumbaba el proceso en Railway
 
@@ -235,6 +301,9 @@ src/
 │   │                       GET /huespedes/buscar (CURP exacta) y
 │   │                       GET /huespedes/buscar-por-nombre (ILIKE parcial,
 │   │                       lista, ver Sesión 2026-08-29)
+│   ├── ocr.js            — POST /ocr/ine (lee CURP + nombre de una INE vía el
+│   │                       servicio de OCR; requireHotel + requireUsuarioStaff,
+│   │                       limitador propio por usuario, ver Sesión 2026-10-15)
 │   ├── admin.js          — POST /admin/hoteles, /admin/hoteles/:id/gov-clave,
 │   │                       POST /admin/limpiar-pruebas
 │   └── reportes.js       — GET /reportes/pdf (PDFKit)
@@ -347,6 +416,13 @@ DATABASE_URL_TENANT=... (rol restringido, SIN superusuario/BYPASSRLS — usado p
                         se apliquen de verdad. Sin esta variable el servidor no
                         arranca: ver verificarRolTenantSeguro() en db/index.js)
 BASE_URL=https://api.clavepui.com
+OCR_SERVICE_URL=...    (opcional, desde 2026-10-15 — URL del servicio de OCR de
+                        INE, en Railway la de la red privada; en local
+                        http://127.0.0.1:8000. Sin ella POST /ocr/ine → 503)
+OCR_SERVICE_TOKEN=...  (opcional — secreto compartido con el servicio de OCR,
+                        mismo valor que su OCR_SERVICE_TOKEN; va en el header
+                        X-OCR-Token. Sin ella POST /ocr/ine → 503)
+OCR_TIMEOUT_MS=10000   (opcional — timeout del reenvío al servicio de OCR)
 
 ## Credenciales por hotel (multi-tenant)
 Cada hotel tiene DOS claves distintas:
@@ -399,7 +475,8 @@ https://api.clavepui.com/desactivar-reporte
 - JWT 1h para tokens de la PUI gobierno
 - Rate limit: global 400/15min por IP (app.js) + dedicados por endpoint:
   `/login` PUI gobierno 50/15min (routes/auth.js), `/auth/login` staff
-  30/15min (routes/usuarios.js) — cada uno con su propio limitador,
+  30/15min (routes/usuarios.js), `POST /ocr/ine` 60/15min **por usuario**
+  (routes/ocr.js, montado después de la auth) — cada uno con su propio limitador,
   aplicado directo sobre la ruta (no vía `app.use('/', limiter, router)`,
   que aplicaría el límite a cualquier request, no solo a esa ruta)
 - Verificar que sonar-project.properties NO existe en el repo

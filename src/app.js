@@ -16,6 +16,7 @@ const usuariosRoutes = require('./routes/usuarios');
 const reportesRoutes = require('./routes/reportes');
 const hotelesRoutes = require('./routes/hoteles');
 const pushRoutes = require('./routes/push');
+const ocrRoutes = require('./routes/ocr');
 
 const app = express();
 
@@ -116,6 +117,7 @@ app.use('/', usuariosRoutes);
 app.use('/', reportesRoutes);
 app.use('/', hotelesRoutes);
 app.use('/', pushRoutes);
+app.use('/', ocrRoutes);                  // POST /ocr/ine (limitador propio en ocr.js)
 
 // ── 8. Health check — Railway lo monitorea cada 30 segundos ──────────────────
 app.get('/health', (req, res) => {

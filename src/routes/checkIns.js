@@ -707,3 +707,5 @@ router.get('/reportes-historial', requireHotel, async (req, res) => {
 });
 
 module.exports = router;
+// requireHotel se reutiliza en routes/ocr.js (POST /ocr/ine), misma auth que check-ins.
+module.exports.requireHotel = requireHotel;

@@ -32,6 +32,15 @@ const config = {
         baseUrl: process.env.BASE_URL || 'http://localhost:3000',
     },
 
+    // Servicio de OCR de INE (RapidOCR, tools/poc-paddleocr en el repo del
+    // frontend). Opcional: sin estas variables POST /ocr/ine responde 503 y
+    // el resto de la app funciona igual.
+    ocr: {
+        serviceUrl: (process.env.OCR_SERVICE_URL || '').replace(/\/$/, ''),
+        serviceToken: process.env.OCR_SERVICE_TOKEN || '',
+        timeoutMs: Number.parseInt(process.env.OCR_TIMEOUT_MS) || 10000,
+    },
+
     webPush: {
         publicKey: process.env.VAPID_PUBLIC_KEY,
         privateKey: process.env.VAPID_PRIVATE_KEY,
