@@ -90,7 +90,7 @@ const siNo = (v) => (v === true ? 'sí' : v === false ? 'no' : 'null');
  *
  * 200 { curp, nombre, tiempos } · 422 sin_curp · 400 imagen_invalida
  * 413 imagen_muy_grande · 415 tipo_no_soportado · 429 limite_excedido
- * 503 ocr_no_disponible / ocr_no_configurado · 504 ocr_timeout · 502 ocr_error
+ * 503 ocr_no_disponible / ocr_no_configurado / ocr_ocupado · 504 ocr_timeout · 502 ocr_error
  */
 router.post('/ocr/ine', requireHotel, requireUsuarioStaff, ocrIneLimiter, recibirImagen, async (req, res) => {
     const t0 = performance.now();
@@ -129,6 +129,15 @@ router.post('/ocr/ine', requireHotel, requireUsuarioStaff, ocrIneLimiter, recibi
     if (r.status === 400) {
         logLectura(req, { ms: ms(), resultado: 'imagen_invalida' });
         return res.status(400).json({ error: 'imagen_invalida', mensaje: 'No se pudo leer la imagen. Toma otra foto.' });
+    }
+    if (r.status === 503 && r.data?.error === 'ocupado') {
+        // El servicio corre una lectura a la vez con cola corta; si se llena
+        // responde 503 al instante en vez de acumular. Es temporal: reintentar.
+        logLectura(req, { ms: ms(), resultado: 'ocupado' });
+        return res.status(503).json({
+            error: 'ocr_ocupado',
+            mensaje: 'El lector de INE está ocupado con otras lecturas. Intenta de nuevo en unos segundos.',
+        });
     }
     if (r.status !== 200) {
         // 401/503 del servicio = token o configuración mal: es un problema

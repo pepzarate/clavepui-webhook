@@ -31,9 +31,10 @@ usa solo la sección "Flujo check-in" de la página de laboratorio
     (llave `hotel_id:usuario`, no IP). Va montado sobre la ruta y DESPUÉS
     de la auth, igual que la lección del `loginLimiter`.
   - **Reenvío:** el mismo buffer se manda a `${OCR_SERVICE_URL}/ocr/ine`
-    (microservicio Python con RapidOCR, `clavepui-frontend/tools/
-    poc-paddleocr`) con el header `X-OCR-Token: OCR_SERVICE_TOKEN` y
-    timeout `OCR_TIMEOUT_MS` (10 s).
+    (servicio privado **`clavepui-ocr`**, repo hermano `clavepui/clavepui-ocr`,
+    RapidOCR dockerizado; desde 2026-10-16. Antes vivía en
+    `clavepui-frontend/tools/poc-paddleocr`) con el header
+    `X-OCR-Token: OCR_SERVICE_TOKEN` y timeout `OCR_TIMEOUT_MS` (10 s).
   - **Respuestas:**
     - 200 `{ curp, nombre, tiempos }`;
     - 422 `sin_curp` (no se encontró un CURP válido);
@@ -42,7 +43,9 @@ usa solo la sección "Flujo check-in" de la página de laboratorio
     - 415 `tipo_no_soportado`;
     - 429 `limite_excedido`;
     - 503 `ocr_no_disponible` (servicio caído) / `ocr_no_configurado`
-      (faltan variables);
+      (faltan variables) / `ocr_ocupado` (desde 2026-10-16: el servicio
+      corre 1 lectura a la vez con 4 en espera y respondió 503 `ocupado`;
+      es temporal, reintentar. Antes caía en el 502 genérico);
     - 504 `ocr_timeout`;
     - 502 `ocr_error` (el servicio respondió error, p. ej. token
       equivocado).
@@ -70,11 +73,19 @@ usa solo la sección "Flujo check-in" de la página de laboratorio
   usa `CLOCK_MONOTONIC`, que en este WSL2 corre ~6% rápido (ver
   `clavepui-frontend/CLAUDE.md`), así que `backend_total_ms` sale ~6%
   alto en local. En Railway no aplica.
-- **Pendiente para producción:** desplegar el servicio de OCR en Railway
-  (red privada junto a este backend) con `OCR_MOTORES=ine` y
-  `OCR_MODO_LAB=0`, y configurar aquí `OCR_SERVICE_URL` (URL interna) y
-  `OCR_SERVICE_TOKEN`. Sin esas dos variables el endpoint responde 503 y
-  el resto de la app funciona igual.
+- **`ocr_ocupado` verificado (2026-10-16)** con un stub que responde 503
+  `ocupado`: el backend contesta 503 con su mensaje y el log trae solo
+  `resultado: ocupado`.
+- **Pendiente para producción:** desplegar `clavepui-ocr` en Railway como
+  servicio privado (sin dominio público) y configurar aquí:
+  - `OCR_SERVICE_URL=http://${{clavepui-ocr.RAILWAY_PRIVATE_DOMAIN}}:${{clavepui-ocr.PORT}}`
+    (= `http://clavepui-ocr.railway.internal:8080`);
+  - `OCR_SERVICE_TOKEN=${{clavepui-ocr.OCR_SERVICE_TOKEN}}`.
+  
+  Pasos completos en el README de `clavepui-ocr`. Sin esas dos variables
+  el endpoint responde 503 y el resto de la app funciona igual.
+- **En local**, `clavepui-ocr` se publica en el **8001** (este backend usa
+  el 8080): `OCR_SERVICE_URL=http://127.0.0.1:8001`.
 
 ## Incidente 2026-09-27 — GET /reportes/pdf tumbaba el proceso en Railway
 
@@ -416,13 +427,22 @@ DATABASE_URL_TENANT=... (rol restringido, SIN superusuario/BYPASSRLS — usado p
                         se apliquen de verdad. Sin esta variable el servidor no
                         arranca: ver verificarRolTenantSeguro() en db/index.js)
 BASE_URL=https://api.clavepui.com
-OCR_SERVICE_URL=...    (opcional, desde 2026-10-15 — URL del servicio de OCR de
-                        INE, en Railway la de la red privada; en local
-                        http://127.0.0.1:8000. Sin ella POST /ocr/ine → 503)
+OCR_SERVICE_URL=...    (opcional, desde 2026-10-15 — URL del servicio privado
+                        clavepui-ocr por la RED PRIVADA de Railway, nunca una
+                        pública: http://clavepui-ocr.railway.internal:8080
+                        (o la referencia ${{clavepui-ocr.RAILWAY_PRIVATE_DOMAIN}}).
+                        Excepción documentada a la regla "nunca URLs internas
+                        de Railway" del CLAUDE.md raíz: esa regla es para lo
+                        público/frontend. En local: http://127.0.0.1:8001.
+                        Sin ella POST /ocr/ine → 503)
 OCR_SERVICE_TOKEN=...  (opcional — secreto compartido con el servicio de OCR,
                         mismo valor que su OCR_SERVICE_TOKEN; va en el header
                         X-OCR-Token. Sin ella POST /ocr/ine → 503)
 OCR_TIMEOUT_MS=10000   (opcional — timeout del reenvío al servicio de OCR)
+
+Plantilla con todas las variables (sin valores): `.env.example` (desde
+2026-10-16). **No leer ni mostrar `.env`**: para saber qué variables hay,
+usar `.env.example`.
 
 ## Credenciales por hotel (multi-tenant)
 Cada hotel tiene DOS claves distintas:
