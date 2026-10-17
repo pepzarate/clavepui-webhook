@@ -11,6 +11,82 @@ https://api.clavepui.com
 npm run dev  (nodemon — puerto 8080)
 Docker Redis: docker start clavepui-redis
 
+## Sesión 2026-10-17 (tarea 2 de check-in v2) — folio, CURP activa, acentos, estado
+
+Correcciones de backend que pidió la página `/checkin-nuevo` (frontend).
+Ninguna cambia lo que ya usa `checkin.astro`.
+
+- **Folio duplicado en envíos simultáneos → 409, ya no 500.** La regla de
+  siempre: folio único **por hotel, sin importar el día**, solo si viene
+  (`idx_check_ins_folio_unico`, índice único parcial `(hotel_id,
+  folio_pms) WHERE folio_pms IS NOT NULL`, que **ya existía** desde
+  Feature 14). La verificación previa con `SELECT` no cubre la carrera: los
+  dos envíos pasan el `SELECT` y el segundo `INSERT` choca con el índice
+  (23505), que caía en el 500 genérico. Ahora `esFolioDuplicado(err)`
+  (checkIns.js) lo traduce al mismo 409 en `POST /check-ins` y en
+  `POST /check-ins/:id/editar`. La verificación previa se conserva.
+  - Antes de tocar nada se buscaron repetidos (solo lectura): 0 en local y
+    0 en producción (240 check-ins con folio de 1275; índice válido,
+    `indisvalid = true`). Cómo repetirlo en producción, con
+    `DATABASE_PUBLIC_URL` (ver memoria del proyecto):
+    `railway run -- sh -c 'psql "$DATABASE_PUBLIC_URL" -c "SET app.bypass_tenant_rls = on; SELECT hotel_id, folio_pms, COUNT(*) FROM check_ins WHERE folio_pms IS NOT NULL GROUP BY 1, 2 HAVING COUNT(*) > 1;"'`
+    (sin el `SET`, RLS devuelve 0 filas siempre; ver la sección RLS).
+- **`GET /check-ins/curp-activa?curp=...`** → `{ activa, total_hoy,
+  habitacion, fecha_checkin }`: si esa CURP ya tiene check-in HOY
+  (America/Mexico_City) en ESTE hotel y en qué habitación (la del más
+  reciente). Auth: `requireHotel` + `requireUsuarioStaff` (devuelve dónde
+  está una persona, por eso pide JWT además de x-hotel-key).
+  `withHotelContext` + `WHERE hotel_id`. Acepta minúsculas; 400 si no es
+  CURP. El `aviso_curp_duplicada` de `POST /check-ins` no cambió.
+- **Búsqueda por nombre sin acentos.** `initDb()` crea la extensión
+  `unaccent` (`IF NOT EXISTS`; es "trusted" desde PG13: basta CREATE sobre
+  la base; en Railway el rol es superusuario y la extensión está
+  disponible, verificado en `pg_available_extensions`) y la función
+  `clavepui_sin_acentos(text)` (IMMUTABLE, `CREATE OR REPLACE`), que usa
+  `unaccent` o, si la extensión no se pudo crear, `translate()` (vocales
+  con acento, diéresis y Ñ) sin cortar el arranque. GRANT EXECUTE
+  explícito a `clavepui_tenant`. `GET /huespedes/buscar-por-nombre`
+  compara `clavepui_sin_acentos(...) ILIKE clavepui_sin_acentos($2)`:
+  "PEREZ" ↔ "Pérez", "munoz" ↔ "Muñoz". **Sin índice**: un `ILIKE '%x%'`
+  no usa btree (haría falta `pg_trgm`) y el filtro por `hotel_id` ya usa
+  el índice único `(hotel_id, curp)`.
+- **`GET /health/estado` en tres niveles** (`services/estadoSistema.js`).
+  Conserva `operativo`, `db` y `cola` (Layout.astro solo lee `operativo`,
+  que sigue siendo `db ok && cola ok`) y agrega:
+  - `ocr`: `ok` / `error` / `no_configurado`, con `GET /salud` del servicio
+    por la red privada, timeout `HEALTH_OCR_TIMEOUT_MS` (1500) y resultado
+    en caché `HEALTH_OCR_CACHE_MS` (15000); consultas simultáneas
+    comparten la misma llamada (11 consultas → 1 llamada, medido);
+  - `latencia_ms: { db, cola, ocr }`;
+  - `nivel`: `error` si Postgres no responde; `degradado` si algo pasa de
+    `HEALTH_UMBRAL_LENTO_MS` (1000), si Redis no responde o si el OCR está
+    caído o sin configurar; si no, `operativo`;
+  - `causas: [{ servicio: 'db'|'cola'|'ocr', motivo: 'lento'|'no_disponible'|'no_configurado' }]`
+    y `umbral_lento_ms`. Sin datos sensibles.
+  
+  Ejemplo (OCR caído):
+  `{"operativo":true,"db":"ok","cola":"ok","ocr":"error","nivel":"degradado","causas":[{"servicio":"ocr","motivo":"no_disponible"}],"latencia_ms":{"db":4,"cola":3,"ocr":null},"umbral_lento_ms":1000}`
+- **Nombre comercial:** `hoteles` no tiene; solo `nombre` (la razón social).
+  No se creó columna.
+- **Pruebas:** `npm run test:checkin-v2` (`tests/test-checkin-v2.js`, con
+  el servidor corriendo con Postgres y Redis): crea dos hoteles de prueba
+  propios y los borra al final. 6 envíos simultáneos con el mismo folio →
+  1×201 + 5×409, 0×500 (los 5 entraron por el índice, no por el `SELECT`);
+  `curp-activa` (habitación, aislamiento, 400/401/403); búsqueda sin
+  acentos en las dos direcciones; forma de `/health/estado` y los niveles
+  con `clasificar()` (incluida base caída). `test-rls.js` sin regresión.
+- **Hallazgo, sin corregir (afecta también a checkin.astro):** si Redis no
+  responde, `POST /check-ins` **guarda el check-in y nunca contesta**
+  (`puiQueue.add` espera la reconexión; medido: sin respuesta a los 15 s
+  y la fila ya en la BD). El recepcionista ve "Registrando…" sin fin y
+  puede reintentar → duplicado. `/checkin-nuevo` corta a los 20 s y avisa
+  que revise Últimos check-ins antes de reintentar. Arreglarlo bien
+  (timeout del encolado + reintento/outbox para no perder la notificación
+  a la PUI) queda pendiente de decisión.
+- **Redis en local sin Docker:** se compiló `redis-server` 7.2.5 desde el
+  código fuente en el scratchpad de la sesión (`make`), sin instalar nada
+  en el sistema.
+
 ## Sesión 2026-10-17 — feature flag `checkin_v2` (página /checkin-nuevo)
 
 Para activar por hotel la página nueva de check-in del frontend
@@ -48,10 +124,8 @@ Para activar por hotel la página nueva de check-in del frontend
   valor nuevo no nulo pisa al anterior. Cuando `/checkin-nuevo` mande los
   nombres en mayúsculas sin acentos (como en la INE), el registro del
   huésped frecuente cambia de "Pérez" a "PEREZ" en su siguiente visita.
-- `GET /huespedes/buscar-por-nombre` usa `ILIKE`: ignora mayúsculas pero
-  **no acentos** ("perez" no encuentra "Pérez" y viceversa). Con datos
-  mezclados (checkin.astro con acentos, v2 sin acentos) la búsqueda se
-  queda corta. Opción para una tarea futura: extensión `unaccent`.
+- `GET /huespedes/buscar-por-nombre` ignoraba mayúsculas pero no acentos.
+  **Resuelto en la tarea 2** con `unaccent` (ver la sesión de arriba).
 
 ## Sesión 2026-10-15 — POST /ocr/ine (lectura de INE para el check-in)
 
@@ -364,7 +438,8 @@ src/
 │   │                       POST /admin/limpiar-pruebas
 │   └── reportes.js       — GET /reportes/pdf (PDFKit)
 ├── services/
-│   └── puiQueue.js       — BullMQ worker — consulta gov_pui_clave por hotel
+│   ├── puiQueue.js       — BullMQ worker — consulta gov_pui_clave por hotel
+│   └── estadoSistema.js  — GET /health/estado: db, cola, ocr, latencias y nivel
 ├── scripts/
 │   ├── registrar-hotel.js            — CLI args: nombre, rfc, pui_clave
 │   │                                   (hoteles no tiene RLS, no necesita contexto)
@@ -485,6 +560,10 @@ OCR_SERVICE_TOKEN=...  (opcional — secreto compartido con el servicio de OCR,
                         mismo valor que su OCR_SERVICE_TOKEN; va en el header
                         X-OCR-Token. Sin ella POST /ocr/ine → 503)
 OCR_TIMEOUT_MS=10000   (opcional — timeout del reenvío al servicio de OCR)
+HEALTH_UMBRAL_LENTO_MS=1000 (opcional — arriba de esto un servicio cuenta como
+                        lento y /health/estado da "degradado")
+HEALTH_OCR_TIMEOUT_MS=1500, HEALTH_OCR_CACHE_MS=15000 (opcionales — consulta a
+                        GET /salud del OCR desde /health/estado)
 
 Plantilla con todas las variables (sin valores): `.env.example` (desde
 2026-10-16). **No leer ni mostrar `.env`**: para saber qué variables hay,

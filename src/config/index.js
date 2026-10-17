@@ -41,6 +41,15 @@ const config = {
         timeoutMs: Number.parseInt(process.env.OCR_TIMEOUT_MS) || 10000,
     },
 
+    // GET /health/estado (services/estadoSistema.js)
+    health: {
+        // Arriba de esto, un servicio que responde cuenta como lento → "degradado"
+        umbralLentoMs: Number.parseInt(process.env.HEALTH_UMBRAL_LENTO_MS) || 1000,
+        // GET /salud del servicio de OCR: timeout corto y resultado en caché
+        ocrTimeoutMs: Number.parseInt(process.env.HEALTH_OCR_TIMEOUT_MS) || 1500,
+        ocrCacheMs: Number.parseInt(process.env.HEALTH_OCR_CACHE_MS) || 15000,
+    },
+
     webPush: {
         publicKey: process.env.VAPID_PUBLIC_KEY,
         privateKey: process.env.VAPID_PRIVATE_KEY,

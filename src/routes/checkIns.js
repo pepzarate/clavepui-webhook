@@ -39,6 +39,18 @@ async function requireHotel(req, res, next) {
     }
 }
 
+const MENSAJE_FOLIO_DUPLICADO = 'Folio ya registrado para este hotel';
+
+/**
+ * ¿El error es el índice único de folio por hotel (idx_check_ins_folio_unico)?
+ * La verificación previa con SELECT no cubre dos envíos simultáneos con el
+ * mismo folio: los dos pasan el SELECT y el segundo INSERT/UPDATE choca con
+ * el índice (23505). Se responde el mismo 409 que la verificación previa.
+ */
+function esFolioDuplicado(err) {
+    return err?.code === '23505' && err.constraint === 'idx_check_ins_folio_unico';
+}
+
 /**
  * POST /check-ins
  * Registra un nuevo check-in manualmente.
@@ -140,7 +152,7 @@ router.post('/check-ins', requireHotel, async (req, res) => {
         });
 
         if (folioDuplicado) {
-            return res.status(409).json({ error: 'Folio ya registrado para este hotel' });
+            return res.status(409).json({ error: MENSAJE_FOLIO_DUPLICADO });
         }
 
         // Encolar notificación a la PUI de forma asíncrona
@@ -179,6 +191,10 @@ router.post('/check-ins', requireHotel, async (req, res) => {
         });
 
     } catch (err) {
+        if (esFolioDuplicado(err)) {
+            logger.info('Folio duplicado detectado por el índice único', { hotel_id: req.hotel.id });
+            return res.status(409).json({ error: MENSAJE_FOLIO_DUPLICADO });
+        }
         logger.error('Error registrando check-in', { error: err.message });
         return res.status(500).json({ error: 'Error interno del servidor' });
     }
@@ -262,7 +278,7 @@ router.post('/check-ins/:id/editar', requireHotel, requireUsuarioStaff, async (r
                     [req.hotel.id, cambios.folio_pms, checkInId]
                 );
                 if (folioExistente.rowCount > 0) {
-                    return { status: 409, error: 'Folio ya registrado para este hotel' };
+                    return { status: 409, error: MENSAJE_FOLIO_DUPLICADO };
                 }
             }
 
@@ -327,7 +343,52 @@ router.post('/check-ins/:id/editar', requireHotel, requireUsuarioStaff, async (r
         });
 
     } catch (err) {
+        if (esFolioDuplicado(err)) {
+            return res.status(409).json({ error: MENSAJE_FOLIO_DUPLICADO });
+        }
         logger.error('Error editando check-in', { error: err.message, id: checkInId });
+        return res.status(500).json({ error: 'Error interno del servidor' });
+    }
+});
+
+/**
+ * GET /check-ins/curp-activa?curp=...
+ * ¿Esta CURP ya tiene un check-in HOY (America/Mexico_City) en este hotel,
+ * y en qué habitación? Para avisar ANTES de registrar (página
+ * /checkin-nuevo). No bloquea nada: el aviso que POST /check-ins calcula
+ * después de insertar (aviso_curp_duplicada) sigue igual.
+ * Auth: x-hotel-key + JWT de staff del mismo hotel (devuelve en qué
+ * habitación está una persona). withHotelContext + WHERE hotel_id: nunca
+ * ve check-ins de otro hotel.
+ */
+router.get('/check-ins/curp-activa', requireHotel, requireUsuarioStaff, async (req, res) => {
+    const curp = String(req.query.curp || '').trim().toUpperCase();
+
+    if (!validarFormatoCURP(curp)) {
+        return res.status(400).json({ error: 'CURP inválida' });
+    }
+
+    const hoyMX = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Mexico_City' });
+
+    try {
+        const result = await withHotelContext(req.hotel.id, (client) => client.query(
+            `SELECT numero_habitacion, fecha_checkin
+             FROM check_ins
+             WHERE hotel_id = $1 AND curp = $2
+               AND DATE(fecha_checkin AT TIME ZONE 'America/Mexico_City') = $3
+             ORDER BY fecha_checkin DESC`,
+            [req.hotel.id, curp, hoyMX]
+        ));
+
+        const ultimo = result.rows[0];
+        return res.status(200).json({
+            activa: result.rowCount > 0,
+            total_hoy: result.rowCount,
+            habitacion: ultimo?.numero_habitacion ?? null,
+            fecha_checkin: ultimo?.fecha_checkin ?? null,
+        });
+    } catch (err) {
+        logger.error('Error consultando CURP activa', { error: err.message });
         return res.status(500).json({ error: 'Error interno del servidor' });
     }
 });
@@ -627,6 +688,10 @@ router.get('/huespedes/buscar', requireHotel, async (req, res) => {
  * alguien que ya se hospedó antes. Devuelve una lista (máx. 10) para que
  * el frontend pueda desambiguar entre personas con nombre similar — a
  * diferencia de /huespedes/buscar (CURP exacta, un solo resultado).
+ * Sin acentos de ningún lado (clavepui_sin_acentos, ver initDb): "PEREZ"
+ * encuentra "Pérez" y al revés. Sin índice: el filtro por hotel_id usa el
+ * índice único (hotel_id, curp) y un ILIKE '%...%' no aprovecharía un
+ * btree (haría falta pg_trgm), con pocos cientos de filas por hotel.
  */
 router.get('/huespedes/buscar-por-nombre', requireHotel, async (req, res) => {
     const nombre = String(req.query.nombre || '').trim();
@@ -648,7 +713,8 @@ router.get('/huespedes/buscar-por-nombre', requireHotel, async (req, res) => {
               veces_hospedado, ultima_visita
        FROM huespedes_frecuentes
        WHERE hotel_id = $1
-         AND CONCAT_WS(' ', nombre, primer_apellido, segundo_apellido) ILIKE $2 ESCAPE '\\'
+         AND clavepui_sin_acentos(CONCAT_WS(' ', nombre, primer_apellido, segundo_apellido))
+             ILIKE clavepui_sin_acentos($2) ESCAPE '\\'
        ORDER BY ultima_visita DESC
        LIMIT 10`,
             [req.hotel.id, `%${terminoEscapado}%`]

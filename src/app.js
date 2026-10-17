@@ -2,9 +2,9 @@ const express = require('express');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const config = require('./config');
-const { puiQueue } = require('./services/puiQueue');
 const { logger, auditLogger } = require('./middleware/logger');
-const { initDb, pool } = require('./db');
+const { initDb } = require('./db');
+const { obtenerEstado } = require('./services/estadoSistema');
 
 // Rutas
 const authRoutes = require('./routes/auth');
@@ -131,27 +131,13 @@ app.get('/health', (req, res) => {
 
 /**
  * GET /health/estado
- * Chequeo más profundo (DB + cola de Redis) para el indicador de estado
- * del sistema en el top-bar del frontend. Separado de /health porque ese
- * lo monitorea Railway cada 30s y no debe depender de servicios externos.
+ * Chequeo más profundo (DB + cola de Redis + servicio de OCR) para el
+ * indicador de estado del sistema del frontend. Separado de /health porque
+ * ese lo monitorea Railway cada 30s y no debe depender de servicios
+ * externos. Detalle de la respuesta en services/estadoSistema.js.
  */
 app.get('/health/estado', async (req, res) => {
-    const conTimeout = (promesa, ms) => Promise.race([
-        promesa,
-        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), ms)),
-    ]);
-
-    const db = await conTimeout(pool.query('SELECT 1'), 3000)
-        .then(() => 'ok')
-        .catch(() => 'error');
-
-    const cola = await conTimeout(puiQueue.client.then((client) => client.ping()), 3000)
-        .then(() => 'ok')
-        .catch(() => 'error');
-
-    const operativo = db === 'ok' && cola === 'ok';
-
-    return res.status(200).json({ operativo, db, cola });
+    return res.status(200).json(await obtenerEstado());
 });
 
 // ── 9. Métodos no permitidos — requisito PUI ─────────────────────────────────

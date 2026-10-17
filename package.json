@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node src/app.js",
     "dev": "nodemon src/app.js",
-    "test": "node tests/test-endpoints.js"
+    "test": "node tests/test-endpoints.js",
+    "test:checkin-v2": "node tests/test-checkin-v2.js"
   },
   "keywords": [],
   "author": "",

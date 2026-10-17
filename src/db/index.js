@@ -219,6 +219,31 @@ async function initDb() {
       ON huespedes_frecuentes(hotel_id, curp);
     `);
 
+    // Búsqueda de huéspedes por nombre sin importar acentos ("PEREZ" ↔
+    // "Pérez"): la INE trae los nombres en mayúsculas sin acentos y la
+    // captura manual puede traerlos. unaccent es extensión "trusted" desde
+    // PG13 (basta con CREATE sobre la base; en Railway el rol es
+    // superusuario). Si no se puede crear, no se corta el arranque: la
+    // función de abajo cae a translate(), que cubre vocales con acento,
+    // diéresis y Ñ.
+    let hayUnaccent = false;
+    try {
+      await client.query(`CREATE EXTENSION IF NOT EXISTS unaccent;`);
+      hayUnaccent = true;
+    } catch (err) {
+      logger.warn('No se pudo crear la extensión unaccent; se usa translate()', { error: err.message });
+    }
+    // Envoltorio IMMUTABLE con el diccionario explícito: unaccent(text) sola
+    // es STABLE, y así la función queda lista por si algún día se indexa.
+    await client.query(`
+      CREATE OR REPLACE FUNCTION clavepui_sin_acentos(texto TEXT) RETURNS TEXT
+      LANGUAGE sql IMMUTABLE PARALLEL SAFE STRICT AS $$
+        ${hayUnaccent
+          ? `SELECT public.unaccent('public.unaccent'::regdictionary, texto)`
+          : `SELECT translate(texto, 'áéíóúüñÁÉÍÓÚÜÑàèìòùÀÈÌÒÙ', 'aeiouunAEIOUUNaeiouAEIOU')`}
+      $$;
+    `);
+
     await client.query(`
       CREATE TABLE IF NOT EXISTS push_subscriptions (
         id           SERIAL PRIMARY KEY,
@@ -308,6 +333,9 @@ async function initDb() {
     // adivinar el nombre de cada secuencia una por una.
     if (tenantRoleExiste) {
       await client.query(`GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO clavepui_tenant;`);
+      // Las funciones traen EXECUTE para PUBLIC por defecto; explícito por
+      // si alguien lo revoca (la usa GET /huespedes/buscar-por-nombre).
+      await client.query(`GRANT EXECUTE ON FUNCTION clavepui_sin_acentos(TEXT) TO clavepui_tenant;`);
     }
 
     await verificarRolTenantSeguro();
