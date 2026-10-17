@@ -73,6 +73,14 @@ async function initDb() {
       ADD COLUMN IF NOT EXISTS gov_pui_clave TEXT;
     `);
 
+    // Feature flag de la página /checkin-nuevo (rediseño del check-in con
+    // OCR de INE), apagado por defecto. hoteles no tiene RLS y solo se lee
+    // con pool (rol dueño), así que no necesita GRANT para clavepui_tenant.
+    await client.query(`
+      ALTER TABLE hoteles
+      ADD COLUMN IF NOT EXISTS checkin_v2 BOOLEAN NOT NULL DEFAULT FALSE;
+    `);
+
     // Tabla principal: reportes activos recibidos desde la PUI
     await client.query(`
       CREATE TABLE IF NOT EXISTS reportes_activos (

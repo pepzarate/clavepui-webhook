@@ -137,4 +137,40 @@ router.post('/admin/hoteles/:id/gov-clave', async (req, res) => {
     }
 });
 
+/**
+ * POST /admin/hoteles/:id/funciones
+ * Activa o desactiva feature flags de un hotel. Body: { checkin_v2: true|false }.
+ */
+router.post('/admin/hoteles/:id/funciones', async (req, res) => {
+    const adminToken = req.headers['x-admin-token'];
+    if (!adminToken || adminToken !== process.env.ADMIN_TOKEN) {
+        return res.status(401).json({ error: 'No autorizado' });
+    }
+
+    const { id } = req.params;
+    const { checkin_v2 } = req.body;
+
+    if (typeof checkin_v2 !== 'boolean') {
+        return res.status(400).json({ error: 'checkin_v2 debe ser true o false' });
+    }
+
+    try {
+        const result = await pool.query(
+            `UPDATE hoteles SET checkin_v2 = $1 WHERE id = $2 RETURNING id, nombre, checkin_v2`,
+            [checkin_v2, id]
+        );
+
+        if (result.rowCount === 0) {
+            return res.status(404).json({ error: 'Hotel no encontrado' });
+        }
+
+        logger.info('Funciones del hotel actualizadas', { hotel_id: id, checkin_v2 });
+        return res.status(200).json({ message: 'Funciones actualizadas', hotel: result.rows[0] });
+
+    } catch (err) {
+        logger.error('Error actualizando funciones del hotel', { error: err.message });
+        return res.status(500).json({ error: 'Error interno' });
+    }
+});
+
 module.exports = router;

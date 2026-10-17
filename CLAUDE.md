@@ -11,6 +11,48 @@ https://api.clavepui.com
 npm run dev  (nodemon — puerto 8080)
 Docker Redis: docker start clavepui-redis
 
+## Sesión 2026-10-17 — feature flag `checkin_v2` (página /checkin-nuevo)
+
+Para activar por hotel la página nueva de check-in del frontend
+(`/checkin-nuevo`, rediseño con OCR de INE; ver
+`clavepui-frontend/CLAUDE.md`, "Check-in v2").
+
+- **Columna** `hoteles.checkin_v2 BOOLEAN NOT NULL DEFAULT FALSE`, en
+  `initDb()` con `ADD COLUMN IF NOT EXISTS` (apagada para todos al
+  desplegar). **Sin GRANT nuevo:** `hoteles` no tiene RLS y todas sus
+  lecturas van por `pool` (rol dueño), nunca por `tenantPool`.
+- **`GET /hoteles/funciones`** (`routes/hoteles.js`) → `{ checkin_v2 }`.
+  Auth: `requireHotel` + `requireUsuarioStaff` (cualquier rol), igual que
+  `POST /ocr/ine`. El frontend lo consulta en cada carga de la página, no
+  en el login, para que un cambio aplique sin volver a iniciar sesión.
+- **`POST /admin/hoteles/:id/funciones`** (`routes/admin.js`) con
+  `x-admin-token` y `{ "checkin_v2": true|false }` (400 si no es
+  booleano, 404 si el hotel no existe).
+- Verificado en local con Postgres real: columna creada (`boolean`, not
+  null, default false); 401 sin auth / sin JWT, 403 con JWT de otro
+  hotel, 200 `false` por defecto, 401/400/404 del admin, activar en un
+  hotel no afecta a otro; dejado en `false` al terminar.
+  `test-rls.js` sin regresión.
+- **Activarlo en producción** (cuando toque): `POST
+  https://api.clavepui.com/admin/hoteles/<id>/funciones`.
+
+### Columnas de nombre (revisado 2026-10-17, sin cambios)
+- `check_ins` y `huespedes_frecuentes` tienen `nombre`, `primer_apellido`
+  y `segundo_apellido` (TEXT, nullable). También `reportes_activos`
+  (vienen del gobierno).
+- `POST /check-ins` las guarda **tal como llegan**: sin `trim`, sin
+  mayúsculas, sin validar que existan (el frontend hace `trim()`).
+  Se mandan así a la PUI en `notificar-coincidencia` (puiQueue.js) y salen
+  así en el CSV y el PDF.
+- `huespedes_frecuentes` se actualiza con `COALESCE(EXCLUDED.x, x)`: un
+  valor nuevo no nulo pisa al anterior. Cuando `/checkin-nuevo` mande los
+  nombres en mayúsculas sin acentos (como en la INE), el registro del
+  huésped frecuente cambia de "Pérez" a "PEREZ" en su siguiente visita.
+- `GET /huespedes/buscar-por-nombre` usa `ILIKE`: ignora mayúsculas pero
+  **no acentos** ("perez" no encuentra "Pérez" y viceversa). Con datos
+  mezclados (checkin.astro con acentos, v2 sin acentos) la búsqueda se
+  queda corta. Opción para una tarea futura: extensión `unaccent`.
+
 ## Sesión 2026-10-15 — POST /ocr/ine (lectura de INE para el check-in)
 
 Endpoint nuevo para leer CURP y nombre del frente de una INE y PRELLENAR
@@ -315,7 +357,10 @@ src/
 │   ├── ocr.js            — POST /ocr/ine (lee CURP + nombre de una INE vía el
 │   │                       servicio de OCR; requireHotel + requireUsuarioStaff,
 │   │                       limitador propio por usuario, ver Sesión 2026-10-15)
+│   ├── hoteles.js        — GET /hoteles/config (gerente), GET /hoteles/funciones
+│   │                       (feature flags, cualquier staff)
 │   ├── admin.js          — POST /admin/hoteles, /admin/hoteles/:id/gov-clave,
+│   │                       /admin/hoteles/:id/funciones,
 │   │                       POST /admin/limpiar-pruebas
 │   └── reportes.js       — GET /reportes/pdf (PDFKit)
 ├── services/
@@ -334,7 +379,8 @@ src/
     └── curp.js           — validarFormatoCURP, parsearCURP, enmascararCURP
 
 ## Base de datos — tablas
-- hoteles          — id, nombre, rfc, pui_clave, gov_pui_clave, activo
+- hoteles          — id, nombre, rfc, pui_clave, gov_pui_clave, activo,
+                     checkin_v2 (flag de /checkin-nuevo, default false)
 - usuarios         — id, hotel_id, nombre, email, password_hash, rol, activo
 - check_ins        — id, hotel_id, curp, nombre, primer_apellido, segundo_apellido,
                      fecha_nacimiento, lugar_nacimiento, sexo_asignado,
