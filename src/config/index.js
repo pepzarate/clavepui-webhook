@@ -12,6 +12,14 @@ const config = {
 
     pui: {
         usuario: 'PUI', // valor fijo que define el manual — nunca cambia
+        // Aviso a la PUI (puiQueue.js): POST /check-ins no espera a Redis más
+        // que esto; si no alcanza, el check-in queda pendiente de encolar
+        // (check_ins.encolado_pui = false) y el reencolador lo reintenta.
+        encolarTimeoutMs: Number.parseInt(process.env.PUI_ENCOLAR_TIMEOUT_MS) || 2000,
+        reencolarIntervaloMs: Number.parseInt(process.env.PUI_REENCOLAR_INTERVALO_MS) || 60000,
+        // Antigüedad mínima de un pendiente para reencolarlo: deja terminar
+        // el intento de la propia request (que dura hasta encolarTimeoutMs).
+        reencolarGraciaMs: Number.parseInt(process.env.PUI_REENCOLAR_GRACIA_MS) || 30000,
     },
 
     db: {

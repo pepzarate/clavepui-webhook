@@ -3,7 +3,7 @@ const { pool, withHotelContext } = require('../db');
 const { logger } = require('../middleware/logger');
 const { requireUsuarioStaff } = require('../middleware/auth');
 const { validarFormatoCURP, parsearCURP, enmascararCURP } = require('../utils/curp');
-const { encolarNotificacionPUI } = require('../services/puiQueue');
+const { intentarEncolar } = require('../services/puiQueue');
 
 const router = express.Router();
 
@@ -113,8 +113,9 @@ router.post('/check-ins', requireHotel, async (req, res) => {
                 `INSERT INTO check_ins
                     (hotel_id, curp, nombre, primer_apellido, segundo_apellido,
                     fecha_nacimiento, lugar_nacimiento, sexo_asignado,
-                    telefono, correo, registrado_por, numero_habitacion, folio_pms, estado_pui)
-                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'pendiente')
+                    telefono, correo, registrado_por, numero_habitacion, folio_pms, estado_pui,
+                    encolado_pui)
+                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'pendiente',FALSE)
                 RETURNING *`,
                 [
                     req.hotel.id,
@@ -155,8 +156,11 @@ router.post('/check-ins', requireHotel, async (req, res) => {
             return res.status(409).json({ error: MENSAJE_FOLIO_DUPLICADO });
         }
 
-        // Encolar notificación a la PUI de forma asíncrona
-        await encolarNotificacionPUI({
+        // Encolar el aviso a la PUI. La BD es la fuente de verdad: el check-in
+        // ya está guardado, así que esto nunca tumba ni cuelga la respuesta
+        // (máx. PUI_ENCOLAR_TIMEOUT_MS). Si Redis no responde, queda
+        // pendiente y el reencolador lo manda después (services/puiQueue.js).
+        await intentarEncolar({
             ...checkIn,
             rfc_hotel: req.hotel.rfc,
             // El reporte_pui_id se llenará cuando el gobierno

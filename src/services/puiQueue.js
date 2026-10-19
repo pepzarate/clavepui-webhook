@@ -1,5 +1,6 @@
 const { Queue, Worker } = require('bullmq');
 const axios = require('axios');
+const config = require('../config');
 const { pool, withHotelContext } = require('../db');
 const { logger } = require('../middleware/logger');
 const { enmascararCURP } = require('../utils/curp');
@@ -16,18 +17,35 @@ const connection = {
 // de este flag y sigue corriendo igual esté en true o false.
 const PUSH_NOTIFICATIONS_ENABLED = false;
 
-// Cola de envíos a la PUI
-const puiQueue = new Queue('pui-notificaciones', { connection });
+// Cola de envíos a la PUI. Sin cola offline de ioredis: si Redis no está
+// conectado, add() falla de inmediato en vez de quedarse esperando (y
+// mandarse sola minutos después, cuando ya se marcó como pendiente). El
+// Worker usa su propia conexión, con la configuración de siempre.
+const puiQueue = new Queue('pui-notificaciones', {
+    connection: { ...connection, enableOfflineQueue: false },
+});
+
+// jobId determinista: si el mismo check-in se encola dos veces (la request y
+// el reencolador, o un add que terminó tarde), BullMQ ignora el segundo
+// mientras el primero siga en Redis. Sin ":" (BullMQ no lo admite en ids
+// propios). Si el job ya se purgó (removeOnComplete), el worker igual
+// descarta lo que ya está 'enviado' (ver yaNotificado()).
+function jobIdDe(checkInId) {
+    return `checkin-${checkInId}`;
+}
 
 /**
  * Agrega un check-in a la cola para notificar a la PUI.
  * El worker lo procesa de forma asíncrona con reintentos.
+ * Puede tardar o fallar si Redis no responde: desde una request usar
+ * intentarEncolar(), que tiene timeout y nunca lanza.
  */
 async function encolarNotificacionPUI(checkIn) {
     await puiQueue.add(
         'notificar-coincidencia',
         { checkIn },
         {
+            jobId: jobIdDe(checkIn.id),
             attempts: 3,
             backoff: {
                 type: 'exponential',
@@ -45,6 +63,117 @@ async function encolarNotificacionPUI(checkIn) {
     });
 }
 
+async function marcarEncolado(checkIn) {
+    await withHotelContext(checkIn.hotel_id, (client) => client.query(
+        `UPDATE check_ins SET encolado_pui = TRUE WHERE id = $1 AND encolado_pui = FALSE`,
+        [checkIn.id]
+    ));
+}
+
+/**
+ * Encola el aviso a la PUI sin esperar a Redis más de
+ * PUI_ENCOLAR_TIMEOUT_MS. Nunca lanza: la base de datos es la fuente de
+ * verdad y el check-in ya está guardado. Si no se pudo, queda con
+ * encolado_pui = false y reencolarPendientes() lo reintenta.
+ * Devuelve true si quedó en la cola.
+ */
+async function intentarEncolar(checkIn) {
+    const add = encolarNotificacionPUI(checkIn);
+    let timer;
+    const limite = new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error('timeout')), config.pui.encolarTimeoutMs);
+    });
+    try {
+        await Promise.race([add, limite]);
+    } catch (err) {
+        logger.warn('Aviso a la PUI pendiente de encolar', {
+            type: 'cola_pui_pendiente',
+            checkinId: checkIn.id,
+            hotel_id: checkIn.hotel_id,
+            motivo: err.message === 'timeout' ? 'timeout' : 'redis_no_disponible',
+        });
+        // Si el add todavía termina después del timeout, se marca entonces.
+        add.then(() => marcarEncolado(checkIn)).catch(() => {});
+        return false;
+    } finally {
+        clearTimeout(timer);
+    }
+    try {
+        await marcarEncolado(checkIn);
+    } catch {
+        // Ya está en la cola; si el reencolador lo vuelve a mandar, el jobId lo descarta.
+        logger.warn('Aviso a la PUI encolado pero sin marcar en BD', {
+            type: 'cola_pui_pendiente',
+            checkinId: checkIn.id,
+            hotel_id: checkIn.hotel_id,
+            motivo: 'db_error',
+        });
+    }
+    return true;
+}
+
+/**
+ * Reencola los check-ins que quedaron con encolado_pui = false (Redis caído
+ * o lento al registrarlos). Recorre hotel por hotel con withHotelContext, así
+ * que respeta RLS como el worker. Si Redis sigue sin responder, se detiene
+ * en el primer fallo y espera a la siguiente vuelta.
+ */
+let reencolando = false;
+
+async function reencolarPendientes() {
+    if (reencolando) return { pendientes: 0, encolados: 0 };
+    reencolando = true;
+    let pendientes = 0;
+    let encolados = 0;
+    try {
+        const hoteles = await pool.query(`SELECT id, rfc FROM hoteles`);
+        recorrer: for (const hotel of hoteles.rows) {
+            const { rows } = await withHotelContext(hotel.id, (client) => client.query(
+                `SELECT * FROM check_ins
+                 WHERE hotel_id = $1 AND encolado_pui = FALSE
+                   AND creado_en < NOW() - make_interval(secs => $2::float / 1000)
+                 ORDER BY creado_en
+                 LIMIT 100`,
+                [hotel.id, config.pui.reencolarGraciaMs]
+            ));
+            pendientes += rows.length;
+            for (const checkIn of rows) {
+                const ok = await intentarEncolar({ ...checkIn, rfc_hotel: hotel.rfc, reporte_pui_id: null });
+                if (!ok) break recorrer;
+                encolados++;
+            }
+        }
+        if (pendientes > 0) {
+            logger.info('Reencolado de avisos a la PUI', { type: 'cola_pui_reencolado', pendientes, encolados });
+        }
+    } catch (err) {
+        logger.error('Error reencolando avisos a la PUI', { type: 'cola_pui_reencolado', error: err.message });
+    } finally {
+        reencolando = false;
+    }
+    return { pendientes, encolados };
+}
+
+function iniciarReencolador() {
+    reencolarPendientes();
+    const timer = setInterval(reencolarPendientes, config.pui.reencolarIntervaloMs);
+    timer.unref();
+    return timer;
+}
+
+/**
+ * ¿Este check-in ya se notificó a la PUI (o ya no existe)? Protege contra
+ * avisos duplicados si un job se vuelve a encolar después de que el
+ * original se purgó de Redis.
+ */
+async function yaNotificado(checkIn) {
+    const r = await withHotelContext(checkIn.hotel_id, (client) => client.query(
+        `SELECT estado_pui FROM check_ins WHERE id = $1`,
+        [checkIn.id]
+    ));
+    return r.rowCount === 0 || r.rows[0].estado_pui === 'enviado';
+}
+
 /**
  * Worker que procesa la cola y hace las llamadas reales a la PUI.
  * Se ejecuta en segundo plano mientras el servidor atiende requests.
@@ -59,6 +188,15 @@ const puiWorker = new Worker(
             checkinId: checkIn.id,
             intento: job.attemptsMade + 1,
         });
+
+        if (await yaNotificado(checkIn)) {
+            logger.info('Check-in ya notificado o inexistente — se omite', {
+                type: 'worker_pui',
+                checkinId: checkIn.id,
+                hotel_id: checkIn.hotel_id,
+            });
+            return;
+        }
 
         try {
             // Buscar si hay reportes activos que coincidan con esta CURP.
@@ -197,4 +335,11 @@ puiWorker.on('failed', (job, err) => {
     });
 });
 
-module.exports = { puiQueue, encolarNotificacionPUI };
+module.exports = {
+    puiQueue,
+    encolarNotificacionPUI,
+    intentarEncolar,
+    reencolarPendientes,
+    iniciarReencolador,
+    jobIdDe,
+};

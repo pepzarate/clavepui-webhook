@@ -9,7 +9,86 @@ https://api.clavepui.com
 
 ## Arrancar en desarrollo
 npm run dev  (nodemon — puerto 8080)
-Docker Redis: docker start clavepui-redis
+Docker Redis: docker start clavepui-redis (en este WSL, `docker` a secas es el
+shim roto de Docker Desktop: usar `/snap/bin/docker`)
+
+## Sesión 2026-10-19 (tarea 2b) — POST /check-ins ya no se cuelga sin Redis
+
+Corrige el hallazgo #32b de la tarea 2: con Redis caído, `POST /check-ins`
+guardaba el check-in y nunca respondía, y el reintento del recepcionista
+lo duplicaba. Ahora **la BD es la fuente de verdad**: si el INSERT funciona,
+el 201 sale siempre.
+
+- **Bandeja de salida:** columna `check_ins.encolado_pui BOOLEAN NOT NULL
+  DEFAULT TRUE` (`initDb()`, `ADD COLUMN IF NOT EXISTS`; las filas viejas
+  quedan en TRUE porque se encolaron en su momento) + índice parcial
+  `idx_check_ins_pendientes_encolar (hotel_id, creado_en) WHERE
+  encolado_pui = FALSE`. Se eligió una columna nueva y no un valor de
+  `estado_pui` porque ese campo es del worker y lo leen el frontend, el
+  CSV y el PDF. Sin GRANT nuevo: el GRANT de tabla de `initDb()` cubre la
+  columna.
+- **`POST /check-ins`** inserta con `encolado_pui = FALSE` y llama a
+  `intentarEncolar()` (`services/puiQueue.js`): `Promise.race` contra
+  `PUI_ENCOLAR_TIMEOUT_MS` (2000). Si entra a la cola → `encolado_pui =
+  TRUE`; si falla o vence → log `cola_pui_pendiente` con solo `checkinId`,
+  `hotel_id` y `motivo` (`timeout` / `redis_no_disponible` / `db_error`) y
+  responde 201 igual. Nunca lanza.
+- **Cola sin `enableOfflineQueue`** (solo el `Queue`; el `Worker` sigue con
+  su conexión de siempre): con Redis caído, `add()` falla al instante en vez
+  de esperar la reconexión y mandarse sola después. Si Redis está caído
+  desde el arranque, el cliente nunca queda listo y gana el timeout de 2 s.
+- **Reencolador** (`reencolarPendientes()`, arranca en `app.js` después de
+  `initDb()`, cada `PUI_REENCOLAR_INTERVALO_MS` = 60000): recorre los
+  hoteles y, **con `withHotelContext` por hotel** (respeta RLS como el
+  worker), toma hasta 100 pendientes con más de `PUI_REENCOLAR_GRACIA_MS`
+  (30000, para no pisar el intento de la propia request) y los encola. Si
+  Redis sigue sin responder, para en el primer fallo hasta la siguiente
+  vuelta. No corre dos veces a la vez.
+- **Sin avisos duplicados:**
+  - `jobId` determinista `checkin-<id>` (`jobIdDe()`): mientras el job siga
+    en Redis, encolarlo otra vez no crea otro;
+  - si un `add()` que venció termina después, marca el check-in en ese
+    momento;
+  - el worker revisa al empezar (`yaNotificado()`) y omite el check-in si
+    ya está `enviado` o ya no existe, por si el job original se purgó
+    (`removeOnComplete`) y se vuelve a encolar.
+- **Otras rutas:** solo `POST /check-ins` encola; `POST
+  /check-ins/:id/editar` y el resto no tocan Redis. `/health/estado` ya
+  tenía su timeout de 3 s.
+- **Logs sin datos personales (de paso):** el `auditLogger` registraba la
+  URL completa, así que `GET /check-ins/curp-activa?curp=…` (de la tarea 2)
+  y `/huespedes/buscar?curp=…` dejaban la CURP entera en el log, y
+  `buscar-por-nombre?nombre=…` el nombre. Ahora `urlSinDatosPersonales()`
+  (`middleware/logger.js`) los enmascara (`curp=ZEMR***`, `nombre=***`), y
+  en el body también se enmascaran `nombre`, `primer_apellido`,
+  `segundo_apellido`, `telefono` y `correo` (antes solo `curp` y claves).
+  Verificado: 0 CURPs en el log de una corrida completa de la suite (antes, 5).
+- **Pruebas** (`npm run test:checkin-v2`, ahora 40 verificaciones): con
+  `TEST_REDIS_PARAR` / `TEST_REDIS_LEVANTAR` (comandos para apagar y
+  prender Redis; sin ellas esa sección sale SKIP):
+  - Redis caído → 201 en 15 ms (falla al instante sin cola offline) y
+    quedan `encolado_pui = false`;
+  - al volver Redis, el reencolador los encola y el worker los procesa
+    (`sin_reporte`);
+  - un job por check-in con jobId `checkin-<id>`, y volver a encolar no
+    cambia los conteos de la cola;
+  - con el job purgado y el check-in ya `enviado`, el reencolado no vuelve
+    a avisar (estado e intentos sin cambios).
+
+  A mano, además:
+  - Redis caído **desde el arranque** del backend → 201 en 2.09 s (timeout)
+    y se encoló 4 s después de levantar Redis; los dos `add` atrasados
+    (request + primer reintento) llegaron con el mismo jobId y el worker
+    procesó una sola vez;
+  - con los tiempos de producción (60 s / 30 s), registrado desde
+    `/checkin-nuevo` con Redis caído (54 ms) y encolado y procesado solo
+    a los 32 s de levantar Redis.
+
+  `test-rls.js` sin regresión.
+- **Redis en local:** el Docker de snap sí funciona aquí
+  (`/snap/bin/docker`; `docker` a secas es el shim roto de Docker
+  Desktop). Para las pruebas se usó un contenedor `redis:7-alpine` creado y
+  borrado en la sesión.
 
 ## Sesión 2026-10-17 (tarea 2 de check-in v2) — folio, CURP activa, acentos, estado
 
@@ -75,14 +154,12 @@ Ninguna cambia lo que ya usa `checkin.astro`.
   `curp-activa` (habitación, aislamiento, 400/401/403); búsqueda sin
   acentos en las dos direcciones; forma de `/health/estado` y los niveles
   con `clasificar()` (incluida base caída). `test-rls.js` sin regresión.
-- **Hallazgo, sin corregir (afecta también a checkin.astro):** si Redis no
-  responde, `POST /check-ins` **guarda el check-in y nunca contesta**
+- **Hallazgo (corregido el 2026-10-19, ver arriba):** si Redis no
+  responde, `POST /check-ins` **guardaba el check-in y nunca contestaba**
   (`puiQueue.add` espera la reconexión; medido: sin respuesta a los 15 s
   y la fila ya en la BD). El recepcionista ve "Registrando…" sin fin y
-  puede reintentar → duplicado. `/checkin-nuevo` corta a los 20 s y avisa
-  que revise Últimos check-ins antes de reintentar. Arreglarlo bien
-  (timeout del encolado + reintento/outbox para no perder la notificación
-  a la PUI) queda pendiente de decisión.
+  puede reintentar → duplicado. Se resolvió con timeout del encolado +
+  bandeja de salida (`encolado_pui`) + reencolador.
 - **Redis en local sin Docker:** se compiló `redis-server` 7.2.5 desde el
   código fuente en el scratchpad de la sesión (`make`), sin instalar nada
   en el sistema.
@@ -460,7 +537,8 @@ src/
 - check_ins        — id, hotel_id, curp, nombre, primer_apellido, segundo_apellido,
                      fecha_nacimiento, lugar_nacimiento, sexo_asignado,
                      numero_habitacion, fecha_checkin, estado_pui,
-                     intentos_pui, ultimo_error, registrado_por
+                     intentos_pui, ultimo_error, registrado_por,
+                     encolado_pui (false = aviso a la PUI pendiente de encolar)
 - reportes_activos — id, curp, hotel_id, nombre, raw_payload, recibido_en, activo
 - check_ins_ediciones — id, check_in_id, hotel_id, campo, valor_anterior,
                      valor_nuevo, editado_por, editado_en (RLS igual que
@@ -564,6 +642,9 @@ HEALTH_UMBRAL_LENTO_MS=1000 (opcional — arriba de esto un servicio cuenta como
                         lento y /health/estado da "degradado")
 HEALTH_OCR_TIMEOUT_MS=1500, HEALTH_OCR_CACHE_MS=15000 (opcionales — consulta a
                         GET /salud del OCR desde /health/estado)
+PUI_ENCOLAR_TIMEOUT_MS=2000, PUI_REENCOLAR_INTERVALO_MS=60000,
+PUI_REENCOLAR_GRACIA_MS=30000 (opcionales, desde 2026-10-19 — espera máxima a
+                        Redis en POST /check-ins y reencolador de pendientes)
 
 Plantilla con todas las variables (sin valores): `.env.example` (desde
 2026-10-16). **No leer ni mostrar `.env`**: para saber qué variables hay,
@@ -582,7 +663,10 @@ Hotel Manalba (id=4):  pui_clave=ManalbaPUI2026!Sec (dado de alta 2026-08-28,
                         RFC HAR730131M1A)
 
 ## Flujo BullMQ — puiQueue.js
-1. Check-in registrado → job encolado con hotel_id
+1. Check-in registrado (`encolado_pui = false`) → job encolado con hotel_id y
+   jobId `checkin-<id>` (máx. 2 s; si Redis no responde queda pendiente y el
+   reencolador lo reintenta cada minuto) → `encolado_pui = true`. El worker
+   omite los check-ins ya `enviado`.
 2. Worker consulta gov_pui_clave del hotel en BD
 3. Si no tiene gov_pui_clave → marca sin_reporte, no llama a PUI
 4. Si tiene → busca reportes_activos para esa CURP

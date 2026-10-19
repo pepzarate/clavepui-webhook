@@ -5,6 +5,7 @@ const config = require('./config');
 const { logger, auditLogger } = require('./middleware/logger');
 const { initDb } = require('./db');
 const { obtenerEstado } = require('./services/estadoSistema');
+const { iniciarReencolador } = require('./services/puiQueue');
 
 // Rutas
 const authRoutes = require('./routes/auth');
@@ -161,6 +162,8 @@ app.use((err, req, res, next) => {
 async function start() {
     try {
         await initDb();
+        // Reintenta cada minuto los avisos a la PUI que no se pudieron encolar
+        iniciarReencolador();
         app.listen(config.port, () => {
             logger.info('ClavePUI webhook iniciado', {
                 port: config.port,

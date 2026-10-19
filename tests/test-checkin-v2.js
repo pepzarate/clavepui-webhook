@@ -3,11 +3,20 @@
  *   - folio duplicado en envíos simultáneos → 201 + 409, nunca 500;
  *   - GET /check-ins/curp-activa (aviso antes de registrar, aislado por hotel);
  *   - búsqueda de huéspedes por nombre sin acentos;
- *   - GET /health/estado (forma de la respuesta y niveles).
+ *   - GET /health/estado (forma de la respuesta y niveles);
+ *   - (tarea 2b, 2026-10-19) POST /check-ins con Redis caído: 201 en < 3 s,
+ *     queda pendiente y se encola UNA sola vez al volver Redis.
  *
  * Requiere el servidor corriendo con Postgres y Redis (POST /check-ins
  * encola en BullMQ): `node tests/test-checkin-v2.js` desde la raíz del repo.
  * Base URL: TEST_URL (default http://localhost:8080).
+ *
+ * La parte de Redis caído necesita poder apagarlo y prenderlo:
+ *   TEST_REDIS_PARAR="docker stop <contenedor>"
+ *   TEST_REDIS_LEVANTAR="docker start <contenedor>"
+ * Sin esas dos variables se omite (SKIP). Conviene arrancar el servidor con
+ * PUI_REENCOLAR_INTERVALO_MS y PUI_REENCOLAR_GRACIA_MS cortos (p. ej. 5000
+ * y 2000) para no esperar el minuto de producción.
  *
  * Crea DOS hoteles de prueba propios (no toca los reales) y al final borra
  * todo lo que creó, pase o falle. Firma JWT de staff con el JWT_SECRET del
@@ -16,8 +25,11 @@
 require('dotenv').config({ quiet: true });
 const crypto = require('node:crypto');
 const jwt = require('jsonwebtoken');
-const { pool, withAdminContext } = require('../src/db');
+const { execSync } = require('node:child_process');
+const { pool, withAdminContext, withHotelContext } = require('../src/db');
 const { clasificar } = require('../src/services/estadoSistema');
+const { puiQueue, jobIdDe } = require('../src/services/puiQueue');
+const { urlSinDatosPersonales } = require('../src/middleware/logger');
 
 const BASE_URL = process.env.TEST_URL || 'http://localhost:8080';
 const CURP_A = 'ZEMR850315HDFNRS06'; // inventado (estructura y verificador válidos)
@@ -172,6 +184,87 @@ async function pruebasEstado() {
     caso('base caída → error', c.nivel === 'error' && c.db === 'error' && c.causas[0].servicio === 'db');
 }
 
+const esperar = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function esperarHasta(condicion, timeoutMs, pasoMs = 500) {
+    const fin = Date.now() + timeoutMs;
+    while (Date.now() < fin) {
+        if (await condicion()) return true;
+        await esperar(pasoMs);
+    }
+    return false;
+}
+
+async function filaCheckIn(hotel, id) {
+    const r = await withHotelContext(hotel.id, (c) => c.query(
+        'SELECT encolado_pui, estado_pui, intentos_pui FROM check_ins WHERE id = $1', [id]));
+    return r.rows[0];
+}
+
+async function pruebasRedisCaido(a) {
+    console.log('\n── POST /check-ins con Redis caído');
+    const parar = process.env.TEST_REDIS_PARAR;
+    const levantar = process.env.TEST_REDIS_LEVANTAR;
+    if (!parar || !levantar) {
+        console.log('SKIP sin TEST_REDIS_PARAR / TEST_REDIS_LEVANTAR');
+        return;
+    }
+    execSync(parar, { stdio: 'ignore' });
+    try {
+        const caido = await esperarHasta(async () => (await http('GET', '/health/estado')).datos.cola === 'error', 15000);
+        caso('el servidor ve la cola caída', caido);
+
+        const t0 = Date.now();
+        const r1 = await checkIn(a, { curp: CURP_A, numero_habitacion: '701' });
+        const ms = Date.now() - t0;
+        caso('responde 201 en menos de 3 s', r1.status === 201 && ms < 3000, `status ${r1.status} en ${ms} ms`);
+        const r2 = await checkIn(a, { curp: CURP_B, numero_habitacion: '702' });
+        caso('un segundo registro también responde 201', r2.status === 201);
+        const ids = [r1.datos.checkin?.id, r2.datos.checkin?.id];
+        const filas = await Promise.all(ids.map((id) => filaCheckIn(a, id)));
+        caso('quedan guardados y pendientes de encolar (encolado_pui = false)',
+            filas.every((f) => f && f.encolado_pui === false && f.estado_pui === 'pendiente'), JSON.stringify(filas));
+    } finally {
+        execSync(levantar, { stdio: 'ignore' });
+    }
+
+    // Al volver Redis, el reencolador los manda solos
+    const ids = (await withHotelContext(a.id, (c) => c.query(
+        `SELECT id FROM check_ins WHERE hotel_id = $1 AND numero_habitacion IN ('701', '702') ORDER BY id`, [a.id]))).rows.map((r) => r.id);
+    const encolados = await esperarHasta(async () => {
+        const f = await Promise.all(ids.map((id) => filaCheckIn(a, id)));
+        return f.every((x) => x.encolado_pui === true);
+    }, 90000, 1000);
+    caso('al volver Redis, el reencolador los encola', encolados);
+    const procesados = await esperarHasta(async () => {
+        const f = await Promise.all(ids.map((id) => filaCheckIn(a, id)));
+        return f.every((x) => x.estado_pui === 'sin_reporte');
+    }, 30000, 1000);
+    caso('el worker los procesa (sin reporte activo → sin_reporte)', procesados);
+
+    const jobs = await Promise.all(ids.map((id) => puiQueue.getJob(jobIdDe(id))));
+    caso('un job por check-in, con jobId determinista', jobs.every((j, i) => j && j.id === `checkin-${ids[i]}`));
+    const antes = await puiQueue.getJobCounts();
+    for (const id of ids) {
+        await puiQueue.add('notificar-coincidencia', { checkIn: { id, hotel_id: a.id } }, { jobId: jobIdDe(id) });
+    }
+    const despues = await puiQueue.getJobCounts();
+    caso('volver a encolar el mismo check-in no crea otro job',
+        JSON.stringify(antes) === JSON.stringify(despues), `${JSON.stringify(antes)} → ${JSON.stringify(despues)}`);
+
+    // Sin duplicar avisos aunque el job original ya se haya purgado de Redis:
+    // si el check-in ya está 'enviado', el worker lo omite.
+    const id = ids[0];
+    await (await puiQueue.getJob(jobIdDe(id))).remove();
+    await withHotelContext(a.id, (c) => c.query(
+        `UPDATE check_ins SET estado_pui = 'enviado', intentos_pui = 1, encolado_pui = FALSE WHERE id = $1`, [id]));
+    const reencolado = await esperarHasta(async () => (await filaCheckIn(a, id)).encolado_pui === true, 90000, 1000);
+    await esperarHasta(async () => (await puiQueue.getJob(jobIdDe(id)))?.finishedOn, 15000);
+    const fila = await filaCheckIn(a, id);
+    caso('ya enviado + reencolado tras purga → el worker no lo vuelve a avisar',
+        reencolado && fila.estado_pui === 'enviado' && fila.intentos_pui === 1, JSON.stringify(fila));
+}
+
 (async () => {
     const hoteles = [];
     try {
@@ -182,6 +275,13 @@ async function pruebasEstado() {
         await pruebasCurpActiva(a, b);
         await pruebasSinAcentos(a, b);
         await pruebasEstado();
+        console.log('\n── Logs sin datos personales');
+        caso('la URL de curp-activa se registra con la CURP enmascarada',
+            urlSinDatosPersonales(`/check-ins/curp-activa?curp=${CURP_A}`) === '/check-ins/curp-activa?curp=ZEMR***');
+        caso('la búsqueda por nombre se registra sin el nombre',
+            urlSinDatosPersonales('/huespedes/buscar-por-nombre?nombre=Juan%20P%C3%A9rez') === '/huespedes/buscar-por-nombre?nombre=***');
+        caso('otras URL no cambian', urlSinDatosPersonales('/check-ins?fecha=2026-10-19&limit=20') === '/check-ins?fecha=2026-10-19&limit=20');
+        await pruebasRedisCaido(a);
     } catch (err) {
         fallas++;
         console.error('ERROR', err);

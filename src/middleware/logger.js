@@ -22,6 +22,28 @@ const logger = winston.createLogger({
     ],
 });
 
+// Parámetros de la URL con datos personales (GET /check-ins/curp-activa,
+// /huespedes/buscar, /huespedes/buscar-por-nombre): se enmascaran igual que
+// en el body. Antes de 2026-10-19 la URL se registraba completa.
+const PARAMS_SENSIBLES = {
+    curp: (v) => v.substring(0, 4) + '***',
+    nombre: () => '***',
+};
+
+function urlSinDatosPersonales(url) {
+    const i = url.indexOf('?');
+    if (i === -1) return url;
+    const params = new URLSearchParams(url.slice(i + 1));
+    let cambio = false;
+    for (const [clave, enmascarar] of Object.entries(PARAMS_SENSIBLES)) {
+        if (params.has(clave)) {
+            params.set(clave, enmascarar(params.get(clave)));
+            cambio = true;
+        }
+    }
+    return cambio ? `${url.slice(0, i)}?${params}` : url;
+}
+
 /**
  * Middleware de auditoría obligatorio según Manual Técnico PUI.
  * Registra toda solicitud recibida, con datos enmascarados.
@@ -39,6 +61,10 @@ function auditLogger(req, res, next) {
     if (requestBody.password) requestBody.password = '***';
     if (requestBody.pui_clave) requestBody.pui_clave = '***';
     if (requestBody.gov_pui_clave) requestBody.gov_pui_clave = '***';
+    // Nombre y contacto del huésped (POST /check-ins, /activar-reporte), desde 2026-10-19
+    for (const campo of ['nombre', 'primer_apellido', 'segundo_apellido', 'telefono', 'correo']) {
+        if (requestBody[campo]) requestBody[campo] = '***';
+    }
 
     // Interceptar res.json para loguear la respuesta
     const originalJson = res.json.bind(res);
@@ -48,7 +74,7 @@ function auditLogger(req, res, next) {
         const logData = {
             type: 'request',
             method,
-            url: originalUrl,
+            url: urlSinDatosPersonales(originalUrl),
             ip,
             statusCode: res.statusCode,
             durationMs: duration,
@@ -68,4 +94,4 @@ function auditLogger(req, res, next) {
     next();
 }
 
-module.exports = { logger, auditLogger };
+module.exports = { logger, auditLogger, urlSinDatosPersonales };

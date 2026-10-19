@@ -153,6 +153,22 @@ async function initDb() {
       ADD COLUMN IF NOT EXISTS folio_pms TEXT;
     `);
 
+    // Bandeja de salida del aviso a la PUI: FALSE mientras el job no esté en
+    // la cola de Redis (POST /check-ins inserta con FALSE y lo pone en TRUE
+    // al encolar; si Redis no responde, el reencolador de puiQueue.js lo
+    // reintenta). DEFAULT TRUE: las filas que ya existían se encolaron en su
+    // momento. Sin GRANT nuevo: el GRANT de tabla de abajo cubre la columna.
+    await client.query(`
+      ALTER TABLE check_ins
+      ADD COLUMN IF NOT EXISTS encolado_pui BOOLEAN NOT NULL DEFAULT TRUE;
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_check_ins_pendientes_encolar
+      ON check_ins(hotel_id, creado_en)
+      WHERE encolado_pui = FALSE;
+    `);
+
     await client.query(`
       CREATE UNIQUE INDEX IF NOT EXISTS idx_check_ins_folio_unico
       ON check_ins(hotel_id, folio_pms)
