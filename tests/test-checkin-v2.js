@@ -5,7 +5,8 @@
  *   - búsqueda de huéspedes por nombre sin acentos;
  *   - GET /health/estado (forma de la respuesta y niveles);
  *   - (tarea 2b, 2026-10-19) POST /check-ins con Redis caído: 201 en < 3 s,
- *     queda pendiente y se encola UNA sola vez al volver Redis.
+ *     queda pendiente y se encola UNA sola vez al volver Redis;
+ *   - (tarea 3, 2026-10-19) metodo_captura y editado_tras_escaneo.
  *
  * Requiere el servidor corriendo con Postgres y Redis (POST /check-ins
  * encola en BullMQ): `node tests/test-checkin-v2.js` desde la raíz del repo.
@@ -201,6 +202,33 @@ async function filaCheckIn(hotel, id) {
     return r.rows[0];
 }
 
+async function pruebasMetodoCaptura(a) {
+    console.log('\n── metodo_captura / editado_tras_escaneo');
+    const fila = async (id) => (await withHotelContext(a.id, (c) => c.query(
+        'SELECT metodo_captura, editado_tras_escaneo FROM check_ins WHERE id = $1', [id]))).rows[0];
+
+    for (const metodo of ['ocr', 'qr', 'lector', 'frecuente', 'manual']) {
+        const r = await checkIn(a, { curp: CURP_A, metodo_captura: metodo, editado_tras_escaneo: metodo === 'ocr' });
+        const f = r.status === 201 ? await fila(r.datos.checkin.id) : null;
+        caso(`acepta y guarda metodo_captura '${metodo}'`,
+            f?.metodo_captura === metodo && f.editado_tras_escaneo === (metodo === 'ocr'), JSON.stringify(f));
+    }
+    const sin = await checkIn(a, { curp: CURP_A });
+    caso('sin los campos (como checkin.astro) → 201 y ambos NULL',
+        sin.status === 201 && JSON.stringify(await fila(sin.datos.checkin.id)) === '{"metodo_captura":null,"editado_tras_escaneo":null}');
+    const malo = await checkIn(a, { curp: CURP_A, metodo_captura: 'camara' });
+    caso('metodo_captura desconocido → 400', malo.status === 400, JSON.stringify(malo.datos));
+    const maloBool = await checkIn(a, { curp: CURP_A, metodo_captura: 'qr', editado_tras_escaneo: 'si' });
+    caso('editado_tras_escaneo no booleano → 400', maloBool.status === 400);
+    let rechazado = false;
+    try {
+        await withHotelContext(a.id, (c) => c.query(`UPDATE check_ins SET metodo_captura = 'camara' WHERE id = $1`, [sin.datos.checkin.id]));
+    } catch (err) {
+        rechazado = err.code === '23514';
+    }
+    caso('el CHECK de la BD rechaza valores fuera de la lista', rechazado);
+}
+
 async function pruebasRedisCaido(a) {
     console.log('\n── POST /check-ins con Redis caído');
     const parar = process.env.TEST_REDIS_PARAR;
@@ -281,6 +309,7 @@ async function pruebasRedisCaido(a) {
         caso('la búsqueda por nombre se registra sin el nombre',
             urlSinDatosPersonales('/huespedes/buscar-por-nombre?nombre=Juan%20P%C3%A9rez') === '/huespedes/buscar-por-nombre?nombre=***');
         caso('otras URL no cambian', urlSinDatosPersonales('/check-ins?fecha=2026-10-19&limit=20') === '/check-ins?fecha=2026-10-19&limit=20');
+        await pruebasMetodoCaptura(a);
         await pruebasRedisCaido(a);
     } catch (err) {
         fallas++;

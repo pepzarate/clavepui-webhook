@@ -163,6 +163,29 @@ async function initDb() {
       ADD COLUMN IF NOT EXISTS encolado_pui BOOLEAN NOT NULL DEFAULT TRUE;
     `);
 
+    // Cómo se capturó la CURP (estadística de uso, sin datos personales):
+    // 'ocr' (INE por cámara), 'qr', 'lector' (USB), 'frecuente' (huésped
+    // frecuente) o 'manual'. NULL en los registros anteriores y en los de
+    // checkin.astro, que no la manda. editado_tras_escaneo: si el
+    // recepcionista corrigió algún campo autollenado antes de registrar.
+    // Sin GRANT nuevo: el GRANT de tabla de abajo cubre las columnas.
+    await client.query(`
+      ALTER TABLE check_ins
+      ADD COLUMN IF NOT EXISTS metodo_captura TEXT;
+    `);
+    await client.query(`
+      ALTER TABLE check_ins
+      ADD COLUMN IF NOT EXISTS editado_tras_escaneo BOOLEAN;
+    `);
+    await client.query(`
+      DO $$ BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'check_ins_metodo_captura_valido') THEN
+          ALTER TABLE check_ins ADD CONSTRAINT check_ins_metodo_captura_valido
+            CHECK (metodo_captura IS NULL OR metodo_captura IN ('ocr', 'qr', 'lector', 'frecuente', 'manual'));
+        END IF;
+      END $$;
+    `);
+
     await client.query(`
       CREATE INDEX IF NOT EXISTS idx_check_ins_pendientes_encolar
       ON check_ins(hotel_id, creado_en)

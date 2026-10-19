@@ -40,6 +40,8 @@ async function requireHotel(req, res, next) {
 }
 
 const MENSAJE_FOLIO_DUPLICADO = 'Folio ya registrado para este hotel';
+// Mismos valores que el CHECK check_ins_metodo_captura_valido (db/index.js)
+const METODOS_CAPTURA = ['ocr', 'qr', 'lector', 'frecuente', 'manual'];
 
 /**
  * ¿El error es el índice único de folio por hotel (idx_check_ins_folio_unico)?
@@ -70,7 +72,18 @@ router.post('/check-ins', requireHotel, async (req, res) => {
         registrado_por,
         numero_habitacion,
         folio_pms,
+        metodo_captura,
+        editado_tras_escaneo,
     } = req.body;
+
+    // Opcionales (los manda /checkin-nuevo; checkin.astro no): estadística de
+    // cómo se capturó la CURP. Sin datos personales.
+    if (metodo_captura !== undefined && metodo_captura !== null && !METODOS_CAPTURA.includes(metodo_captura)) {
+        return res.status(400).json({ error: `metodo_captura debe ser uno de: ${METODOS_CAPTURA.join(', ')}` });
+    }
+    if (editado_tras_escaneo !== undefined && editado_tras_escaneo !== null && typeof editado_tras_escaneo !== 'boolean') {
+        return res.status(400).json({ error: 'editado_tras_escaneo debe ser true o false' });
+    }
 
     // Validar CURP obligatoria
     if (!curp) {
@@ -114,8 +127,8 @@ router.post('/check-ins', requireHotel, async (req, res) => {
                     (hotel_id, curp, nombre, primer_apellido, segundo_apellido,
                     fecha_nacimiento, lugar_nacimiento, sexo_asignado,
                     telefono, correo, registrado_por, numero_habitacion, folio_pms, estado_pui,
-                    encolado_pui)
-                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'pendiente',FALSE)
+                    encolado_pui, metodo_captura, editado_tras_escaneo)
+                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'pendiente',FALSE,$14,$15)
                 RETURNING *`,
                 [
                     req.hotel.id,
@@ -131,6 +144,8 @@ router.post('/check-ins', requireHotel, async (req, res) => {
                     registrado_por || 'recepcion',
                     numero_habitacion || null,
                     folio_pms || null,
+                    metodo_captura ?? null,
+                    editado_tras_escaneo ?? null,
                 ]
             );
 

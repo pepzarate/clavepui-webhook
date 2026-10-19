@@ -12,6 +12,32 @@ npm run dev  (nodemon — puerto 8080)
 Docker Redis: docker start clavepui-redis (en este WSL, `docker` a secas es el
 shim roto de Docker Desktop: usar `/snap/bin/docker`)
 
+## Sesión 2026-10-19 (tarea 3 de check-in v2) — método de captura
+
+Estadística de cómo se captura la CURP en `/checkin-nuevo` (escáner por
+cámara de la tarea 3), sin datos personales.
+
+- **Columnas** en `check_ins` (`initDb()`, `ADD COLUMN IF NOT EXISTS`):
+  `metodo_captura TEXT` y `editado_tras_escaneo BOOLEAN`, NULL en los
+  registros anteriores y en los de `checkin.astro` (que no las manda). CHECK
+  idempotente `check_ins_metodo_captura_valido` (en un `DO $$ … $$` que
+  revisa `pg_constraint`): `'ocr'`, `'qr'`, `'lector'`, `'frecuente'`,
+  `'manual'`. **`'frecuente'` no estaba en lo pedido**: es la CURP llenada
+  al confirmar un huésped de la búsqueda por nombre; meterlo en `'manual'`
+  habría mezclado dos cosas distintas. Sin GRANT nuevo (el GRANT de tabla
+  cubre columnas); RLS sin cambios.
+- **`POST /check-ins`** las acepta como opcionales: valor fuera de la lista
+  → 400; `editado_tras_escaneo` no booleano → 400; ausentes → NULL.
+- **Pruebas** (`npm run test:checkin-v2`, ahora 49): los 5 valores se
+  guardan con su `editado_tras_escaneo`, sin campos → NULL/NULL, 400 para
+  valores inválidos, y el CHECK de la BD rechaza un UPDATE con un valor
+  fuera de la lista (23514).
+- **Ver el uso por método y hotel** (producción, solo lectura; el `SET`
+  es necesario por RLS):
+  ```
+  railway run -- sh -c 'psql "$DATABASE_PUBLIC_URL" -c "SET app.bypass_tenant_rls = on; SELECT h.nombre AS hotel, COALESCE(c.metodo_captura, '\''(sin dato)'\'') AS metodo, COUNT(*) AS registros, COUNT(*) FILTER (WHERE c.editado_tras_escaneo) AS editados_tras_escaneo FROM check_ins c JOIN hoteles h ON h.id = c.hotel_id WHERE c.fecha_checkin >= NOW() - interval '\''30 days'\'' GROUP BY 1, 2 ORDER BY 1, 3 DESC;"'
+  ```
+
 ## Sesión 2026-10-19 (tarea 2b) — POST /check-ins ya no se cuelga sin Redis
 
 Corrige el hallazgo #32b de la tarea 2: con Redis caído, `POST /check-ins`
@@ -538,7 +564,9 @@ src/
                      fecha_nacimiento, lugar_nacimiento, sexo_asignado,
                      numero_habitacion, fecha_checkin, estado_pui,
                      intentos_pui, ultimo_error, registrado_por,
-                     encolado_pui (false = aviso a la PUI pendiente de encolar)
+                     encolado_pui (false = aviso a la PUI pendiente de encolar),
+                     metodo_captura ('ocr'|'qr'|'lector'|'frecuente'|'manual'|NULL),
+                     editado_tras_escaneo (NULL en registros sin método)
 - reportes_activos — id, curp, hotel_id, nombre, raw_payload, recibido_en, activo
 - check_ins_ediciones — id, check_in_id, hotel_id, campo, valor_anterior,
                      valor_nuevo, editado_por, editado_en (RLS igual que
