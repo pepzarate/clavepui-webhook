@@ -3,6 +3,7 @@ const { pool, withHotelContext } = require('../db');
 const { logger } = require('../middleware/logger');
 const { requireUsuarioStaff } = require('../middleware/auth');
 const { validarFormatoCURP, parsearCURP, enmascararCURP } = require('../utils/curp');
+const { validarCamposTexto } = require('../utils/validacionCheckIn');
 const { intentarEncolar } = require('../services/puiQueue');
 const { conHoraLocal, zonaDelHotel } = require('../utils/zonaHoraria');
 
@@ -84,6 +85,12 @@ router.post('/check-ins', requireHotel, async (req, res) => {
     }
     if (editado_tras_escaneo !== undefined && editado_tras_escaneo !== null && typeof editado_tras_escaneo !== 'boolean') {
         return res.status(400).json({ error: 'editado_tras_escaneo debe ser true o false' });
+    }
+
+    // Nombres, folio y habitación: longitud y caracteres permitidos (tarea 4b)
+    const invalido = validarCamposTexto(req.body);
+    if (invalido) {
+        return res.status(400).json({ error: invalido.error, campo: invalido.campo });
     }
 
     // Validar CURP obligatoria
@@ -266,6 +273,11 @@ router.post('/check-ins/:id/editar', requireHotel, requireUsuarioStaff, async (r
         return res.status(400).json({
             error: 'Debes enviar folio_pms y/o numero_habitacion para editar'
         });
+    }
+
+    const invalido = validarCamposTexto(cambios, Object.keys(cambios));
+    if (invalido) {
+        return res.status(400).json({ error: invalido.error, campo: invalido.campo });
     }
 
     try {

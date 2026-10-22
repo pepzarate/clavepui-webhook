@@ -12,6 +12,57 @@ npm run dev  (nodemon — puerto 8080)
 Docker Redis: docker start clavepui-redis (en este WSL, `docker` a secas es el
 shim roto de Docker Desktop: usar `/snap/bin/docker`)
 
+## Sesión 2026-10-22 (tarea 4b) — seguridad y cumplimiento antes del rediseño
+
+- **Validación de texto libre en `POST /check-ins` y
+  `POST /check-ins/:id/editar`** (`utils/validacionCheckIn.js`). Lo que no
+  cumple → 400 `{ error, campo }`. Vacío o ausente sigue valiendo:
+  checkin.astro solo exige la CURP.
+
+  | Campo | Caracteres permitidos | Máximo |
+  |---|---|---|
+  | Nombre y apellidos | letras Unicode con sus marcas (acentos, Ñ, Ü), espacio, guion, apóstrofo `'`/`’` y punto | 50 (límite de `nombre` en el Manual PUI 8.2) |
+  | `folio_pms` | `[A-Za-z0-9-]` | 40 |
+  | `numero_habitacion` | `[A-Za-z0-9-]` | 20 |
+
+  - Aceptados en las pruebas: "JOSÉ MARÍA", "D'ARTAGNAN", "MA. GUADALUPE",
+    "O’BRIEN", "Nicté-Ha", "de la Cruz".
+  - Rechazados: `<`, `>`, `"`, `:`, `=`, dígitos en nombres y espacios en
+    folio o habitación.
+  - **Antes de desplegar**, el bloque 2 de la consulta de abajo dice cuántos
+    registros reales de producción no pasarían la regla (por ejemplo,
+    habitaciones con espacio).
+- **Consulta de solo lectura de posibles inyecciones** ya guardadas
+  (`src/scripts/sql/contar-posibles-inyecciones.sql`). Devuelve conteos e
+  ids por hotel, nunca contenido, en dos bloques:
+  1. patrones de inyección en `check_ins` y `huespedes_frecuentes`;
+  2. valores que la validación nueva rechazaría.
+
+  Es una transacción `READ ONLY` que termina en ROLLBACK. Para correrla:
+  `railway run -- sh -c 'psql "$DATABASE_PUBLIC_URL" -X -q -f src/scripts/sql/contar-posibles-inyecciones.sql'`
+- **`POST /csp-report`** (`routes/csp.js`) recibe los reportes de la CSP
+  del frontend (`vercel.json`, por ahora Report-Only).
+  - Va montado **antes** del limitador global, con límite propio (100/15
+    min por IP; al pasarlo responde 204 sin loguear), para no gastar el
+    cupo de la IP del hotel.
+  - Log `csp_violacion` con solo la directiva, el origen de lo bloqueado y
+    la ruta de la página.
+- **`GET /hoteles/config` ya no devuelve la `pui_clave`.** Ahora manda
+  `pui_clave_configurada` y `pui_clave_ultimos4`.
+  - **Hallazgo abierto (BACKLOG #42):** `POST /auth/login` sigue mandando
+    la `pui_clave` al navegador, porque el frontend la usa como
+    `x-hotel-key` en todas las llamadas. Es la misma clave con la que la
+    PUI se autentica en `POST /login`. Quitarla exige cambiar cómo se
+    autentica el frontend; está pendiente de decisión.
+- **"Solo hoy" para editar:** ya lo validaba el servidor para cualquier rol
+  (403, desde `cc74c28`); se agregó una prueba. Ver y exportar otras
+  fechas (`GET /check-ins`, export, PDF) siguen sin validarse en el
+  servidor, porque solo piden `x-hotel-key` (#42).
+- **Búsqueda de la PUI, fases 1 y 2: no existen.** Comparación detallada en
+  BACKLOG #43; la implementación espera el Manual Técnico.
+- **Pruebas:** `test-checkin-v2` sube a 81: validación, config sin clave,
+  editar solo hoy y csp-report.
+
 ## Sesión 2026-10-22 (tarea 4a de check-in v2) — hotel de prueba, zona horaria, logs
 
 ### Hotel de prueba (`hoteles.es_prueba`)

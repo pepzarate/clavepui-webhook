@@ -30,7 +30,10 @@ router.get('/hoteles/config', requireGerente, async (req, res) => {
         return res.status(200).json({
             nombre: hotel.nombre,
             rfc: hotel.rfc,
-            pui_clave: hotel.pui_clave,
+            // La pui_clave es una credencial (con ella la PUI se autentica en
+            // POST /login): nunca completa, solo si existe y sus 4 últimos.
+            pui_clave_configurada: Boolean(hotel.pui_clave),
+            pui_clave_ultimos4: hotel.pui_clave ? hotel.pui_clave.slice(-4) : null,
             gov_pui_clave_configurada: Boolean(hotel.gov_pui_clave),
         });
     } catch (err) {

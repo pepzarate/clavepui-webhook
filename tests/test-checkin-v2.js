@@ -351,6 +351,73 @@ async function pruebasRedisCaido(a) {
         reencolado && fila.estado_pui === 'enviado' && fila.intentos_pui === 1, JSON.stringify(fila));
 }
 
+async function pruebasValidacion(a) {
+    console.log('\n── Validación de nombres, folio y habitación (tarea 4b)');
+    const validos = [
+        { nombre: 'JOSÉ MARÍA', primer_apellido: "D'ARTAGNAN", segundo_apellido: 'PEÑA-NIETO' },
+        { nombre: 'MA. GUADALUPE', primer_apellido: 'O’BRIEN', segundo_apellido: 'MÜLLER' },
+        { nombre: 'Xóchitl', primer_apellido: 'de la Cruz', segundo_apellido: '' },
+    ];
+    for (const [i, v] of validos.entries()) {
+        const r = await checkIn(a, { curp: CURP_B, numero_habitacion: `V-${i}1A`, folio_pms: `VAL-${crypto.randomBytes(3).toString('hex')}`, ...v });
+        caso(`nombre real válido aceptado (${v.nombre} ${v.primer_apellido})`, r.status === 201, `${r.status} ${r.datos.error ?? ''}`);
+    }
+    const sinNombres = await checkIn(a, { curp: CURP_B });
+    caso('solo CURP (como checkin.astro sin nombres) sigue aceptado', sinNombres.status === 201, String(sinNombres.status));
+
+    const invalidos = [
+        [{ nombre: '<img src=x onerror=alert(1)>' }, 'nombre'],
+        [{ primer_apellido: 'JUAN<script>' }, 'primer_apellido'],
+        [{ segundo_apellido: 'javascript:x' }, 'segundo_apellido'],
+        [{ nombre: 'JUAN2' }, 'nombre'],
+        [{ nombre: 'A'.repeat(51) }, 'nombre'],
+        [{ numero_habitacion: '10 1' }, 'numero_habitacion'],
+        [{ numero_habitacion: '<b>1</b>' }, 'numero_habitacion'],
+        [{ folio_pms: 'F"1' }, 'folio_pms'],
+        [{ folio_pms: 'F'.repeat(41) }, 'folio_pms'],
+        [{ nombre: 42 }, 'nombre'],
+    ];
+    for (const [datos, campo] of invalidos) {
+        const r = await checkIn(a, { curp: CURP_B, ...datos });
+        caso(`400 para ${campo} inválido (${JSON.stringify(datos).slice(0, 40)})`, r.status === 400 && r.datos.campo === campo, `${r.status} ${r.datos.campo ?? ''}`);
+    }
+
+    const base = await checkIn(a, { curp: CURP_B, numero_habitacion: '300' });
+    const ed1 = await http('POST', `/check-ins/${base.datos.checkin.id}/editar`, { hotel: a, jwtDe: a, body: { numero_habitacion: '30<1' } });
+    caso('editar: 400 para habitación inválida', ed1.status === 400 && ed1.datos.campo === 'numero_habitacion', String(ed1.status));
+    const ed2 = await http('POST', `/check-ins/${base.datos.checkin.id}/editar`, { hotel: a, jwtDe: a, body: { numero_habitacion: '301-B', folio_pms: '' } });
+    caso('editar: valores válidos (y folio vacío) aceptados', ed2.status === 200, String(ed2.status));
+}
+
+async function pruebasConfigSinClave(a) {
+    console.log('\n── GET /hoteles/config no devuelve la pui_clave');
+    const gerente = {
+        token: jwt.sign({ sub: 0, email: 'g@local', nombre: 'Gerente', rol: 'gerente', hotel_id: a.id }, process.env.JWT_SECRET, { expiresIn: '10m' }),
+    };
+    const r = await http('GET', '/hoteles/config', { jwtDe: gerente });
+    const texto = JSON.stringify(r.datos);
+    caso('config 200 sin pui_clave completa', r.status === 200 && !('pui_clave' in r.datos) && !texto.includes(a.pui_clave), texto);
+    caso('config trae configurada + últimos 4', r.datos.pui_clave_configurada === true && r.datos.pui_clave_ultimos4 === a.pui_clave.slice(-4));
+}
+
+async function pruebasEdicionSoloHoy(a) {
+    console.log('\n── Editar solo check-ins de hoy (servidor)');
+    const r = await checkIn(a, { curp: CURP_B, numero_habitacion: '400' });
+    await withHotelContext(a.id, (c) => c.query(`UPDATE check_ins SET fecha_checkin = NOW() - interval '2 days' WHERE id = $1`, [r.datos.checkin.id]));
+    const ed = await http('POST', `/check-ins/${r.datos.checkin.id}/editar`, { hotel: a, jwtDe: a, body: { numero_habitacion: '401' } });
+    caso('recepción no puede editar un check-in de hace 2 días (403)', ed.status === 403, String(ed.status));
+}
+
+async function pruebasReporteCsp() {
+    console.log('\n── POST /csp-report');
+    const res = await fetch(`${BASE_URL}/csp-report`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/csp-report' },
+        body: JSON.stringify({ 'csp-report': { 'document-uri': 'https://app.clavepui.com/historial?x=1', 'effective-directive': 'script-src-elem', 'blocked-uri': 'https://malo.example/x.js?curp=ZEMR' } }),
+    });
+    caso('reporte de CSP → 204', res.status === 204, String(res.status));
+}
+
 (async () => {
     const hoteles = [];
     try {
@@ -372,6 +439,10 @@ async function pruebasRedisCaido(a) {
         await pruebasMetodoCaptura(a);
         await pruebasMedianoche(m);
         await pruebasHotelDePrueba(pr);
+        await pruebasValidacion(a);
+        await pruebasConfigSinClave(a);
+        await pruebasEdicionSoloHoy(a);
+        await pruebasReporteCsp();
         await pruebasRedisCaido(a);
     } catch (err) {
         fallas++;

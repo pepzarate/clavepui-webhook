@@ -18,6 +18,7 @@ const reportesRoutes = require('./routes/reportes');
 const hotelesRoutes = require('./routes/hoteles');
 const pushRoutes = require('./routes/push');
 const ocrRoutes = require('./routes/ocr');
+const cspRoutes = require('./routes/csp');
 
 const app = express();
 
@@ -98,6 +99,10 @@ const globalLimiter = rateLimit({
         res.status(429).json({ error: 'Demasiadas solicitudes, intenta más tarde' });
     },
 });
+
+// Reportes de CSP del frontend: antes del limitador global, con límite propio
+// (ver routes/csp.js), para que no consuman el cupo de la IP del hotel
+app.use('/', cspRoutes);
 
 app.use(globalLimiter);
 
