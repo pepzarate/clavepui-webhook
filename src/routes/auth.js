@@ -50,7 +50,7 @@ router.post('/login', loginLimiter, async (req, res) => {
         const result = await pool.query(
             `SELECT id, nombre, rfc
        FROM hoteles
-       WHERE pui_clave = $1 AND activo = TRUE`,
+       WHERE pui_clave = $1 AND activo = TRUE AND NOT es_prueba`,
             [clave]
         );
 

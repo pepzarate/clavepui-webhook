@@ -6,7 +6,9 @@
  *   - GET /health/estado (forma de la respuesta y niveles);
  *   - (tarea 2b, 2026-10-19) POST /check-ins con Redis caído: 201 en < 3 s,
  *     queda pendiente y se encola UNA sola vez al volver Redis;
- *   - (tarea 3, 2026-10-19) metodo_captura y editado_tras_escaneo.
+ *   - (tarea 3, 2026-10-19) metodo_captura y editado_tras_escaneo;
+ *   - (tarea 4a, 2026-10-22) hora local cerca de la medianoche y hotel de
+ *     prueba (es_prueba): nunca se encola ni llega a la PUI.
  *
  * Requiere el servidor corriendo con Postgres y Redis (POST /check-ins
  * encola en BullMQ): `node tests/test-checkin-v2.js` desde la raíz del repo.
@@ -29,7 +31,7 @@ const jwt = require('jsonwebtoken');
 const { execSync } = require('node:child_process');
 const { pool, withAdminContext, withHotelContext } = require('../src/db');
 const { clasificar } = require('../src/services/estadoSistema');
-const { puiQueue, jobIdDe } = require('../src/services/puiQueue');
+const { puiQueue, jobIdDe, reencolarPendientes } = require('../src/services/puiQueue');
 const { urlSinDatosPersonales } = require('../src/middleware/logger');
 
 const BASE_URL = process.env.TEST_URL || 'http://localhost:8080';
@@ -54,12 +56,12 @@ async function http(metodo, ruta, { hotel, jwtDe, body } = {}) {
     return { status: res.status, datos };
 }
 
-async function crearHotel(sufijo) {
+async function crearHotel(sufijo, { esPrueba = false } = {}) {
     const id = crypto.randomBytes(4).toString('hex').toUpperCase();
     const { rows } = await pool.query(
-        `INSERT INTO hoteles (nombre, rfc, pui_clave) VALUES ($1, $2, $3)
+        `INSERT INTO hoteles (nombre, rfc, pui_clave, es_prueba) VALUES ($1, $2, $3, $4)
          RETURNING id, nombre, pui_clave`,
-        [`PRUEBA V2 ${sufijo}`, `TST${id}${sufijo}`, `PruebaV2-${id}-${sufijo}`]
+        [`PRUEBA V2 ${sufijo}`, `TST${id}${sufijo}`, `PruebaV2-${id}-${sufijo}`, esPrueba]
     );
     const hotel = rows[0];
     hotel.token = jwt.sign(
@@ -229,6 +231,62 @@ async function pruebasMetodoCaptura(a) {
     caso('el CHECK de la BD rechaza valores fuera de la lista', rechazado);
 }
 
+const ZONA = 'America/Mexico_City';
+
+async function pruebasMedianoche(m) {
+    console.log('\n── Hora local cerca de la medianoche (hotel sin otros check-ins)');
+    // 00:01 de hoy y 23:59 de ayer, hora de México, calculados en SQL
+    const ins = (expr, curp, hab) => withHotelContext(m.id, (c) => c.query(
+        `INSERT INTO check_ins (hotel_id, curp, numero_habitacion, estado_pui, encolado_pui, fecha_checkin)
+         VALUES ($1, $2, $3, 'sin_reporte', TRUE, ${expr}) RETURNING id`, [m.id, curp, hab]));
+    await ins(`(date_trunc('day', NOW() AT TIME ZONE '${ZONA}') + interval '1 minute') AT TIME ZONE '${ZONA}'`, CURP_A, '801');
+    await ins(`(date_trunc('day', NOW() AT TIME ZONE '${ZONA}') - interval '1 minute') AT TIME ZONE '${ZONA}'`, CURP_B, '802');
+    const hoy = new Date().toLocaleDateString('en-CA', { timeZone: ZONA });
+    const ayer = new Date(new Date(`${hoy}T12:00:00Z`).getTime() - 86400000).toISOString().slice(0, 10);
+
+    const lHoy = (await http('GET', `/check-ins?fecha=${hoy}`, { hotel: m })).datos.checkins;
+    caso('hoy: solo el de las 00:01, con hora_local y fecha_local del hotel',
+        lHoy.length === 1 && lHoy[0].numero_habitacion === '801' && lHoy[0].hora_local === '00:01' && lHoy[0].fecha_local === hoy,
+        JSON.stringify(lHoy.map((c) => [c.numero_habitacion, c.fecha_local, c.hora_local])));
+    caso('fecha_checkin sigue llegando como antes (checkin.astro / historial)', typeof lHoy[0]?.fecha_checkin === 'string' && lHoy[0].fecha_checkin.endsWith('Z'));
+    const lAyer = (await http('GET', `/check-ins?fecha=${ayer}`, { hotel: m })).datos.checkins;
+    caso('ayer: el de las 23:59 queda en el día anterior',
+        lAyer.length === 1 && lAyer[0].hora_local === '23:59' && lAyer[0].fecha_local === ayer, JSON.stringify(lAyer.map((c) => [c.fecha_local, c.hora_local])));
+    const resumen = (await http('GET', '/check-ins/resumen', { hotel: m })).datos;
+    caso('resumen de hoy cuenta 1 (no el de las 23:59 de ayer)', resumen.total === 1 && resumen.fecha_inicio === hoy, JSON.stringify(resumen));
+    const ca = (curp) => http('GET', `/check-ins/curp-activa?curp=${curp}`, { hotel: m, jwtDe: m });
+    const rHoy = (await ca(CURP_A)).datos, rAyer = (await ca(CURP_B)).datos;
+    caso('curp-activa: la de las 00:01 cuenta como hoy (hora_local 00:01)', rHoy.activa === true && rHoy.hora_local === '00:01', JSON.stringify(rHoy));
+    caso('curp-activa: la de las 23:59 de ayer no cuenta', rAyer.activa === false, JSON.stringify(rAyer));
+    const nuevo = await checkIn(m, { curp: CURP_A, numero_habitacion: '803' });
+    const ahora = new Date().toLocaleTimeString('en-GB', { timeZone: ZONA, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+    caso('POST /check-ins devuelve fecha_local/hora_local de ahora (además de lo de siempre)',
+        nuevo.datos.checkin.fecha_local === hoy && Math.abs(Number(nuevo.datos.checkin.hora_local.replace(':', '')) - Number(ahora.replace(':', ''))) <= 1
+        && 'curp' in nuevo.datos.checkin && 'fecha_checkin' in nuevo.datos.checkin, JSON.stringify({ l: nuevo.datos.checkin.hora_local, ahora }));
+}
+
+async function pruebasHotelDePrueba(p) {
+    console.log('\n── Hotel de prueba (es_prueba): nunca va a la PUI');
+    const r = await checkIn(p, { curp: CURP_A, numero_habitacion: '901' });
+    const id = r.datos.checkin?.id;
+    const fila = (await withHotelContext(p.id, (c) => c.query('SELECT estado_pui, encolado_pui FROM check_ins WHERE id = $1', [id]))).rows[0];
+    caso('registra (201) como sin_reporte y sin encolar', r.status === 201 && fila.estado_pui === 'sin_reporte' && fila.encolado_pui === true, JSON.stringify(fila));
+    caso('no hay job en la cola para ese check-in', !(await puiQueue.getJob(jobIdDe(id))));
+    // Aunque quede marcado como pendiente de encolar, el reencolador lo ignora
+    await withHotelContext(p.id, (c) => c.query(`UPDATE check_ins SET encolado_pui = FALSE, creado_en = NOW() - interval '1 hour' WHERE id = $1`, [id]));
+    await reencolarPendientes();
+    const f2 = (await withHotelContext(p.id, (c) => c.query('SELECT encolado_pui FROM check_ins WHERE id = $1', [id]))).rows[0];
+    caso('el reencolador no lo encola', f2.encolado_pui === false && !(await puiQueue.getJob(jobIdDe(id))));
+    // Y si algo lo encolara a mano, el worker no hace nada
+    await withHotelContext(p.id, (c) => c.query(`UPDATE check_ins SET estado_pui = 'pendiente' WHERE id = $1`, [id]));
+    await puiQueue.add('notificar-coincidencia', { checkIn: { id, hotel_id: p.id, curp: CURP_A } }, { jobId: jobIdDe(id) });
+    await esperarHasta(async () => (await puiQueue.getJob(jobIdDe(id)))?.finishedOn, 15000);
+    const f3 = (await withHotelContext(p.id, (c) => c.query('SELECT estado_pui, intentos_pui FROM check_ins WHERE id = $1', [id]))).rows[0];
+    caso('el worker lo omite (no toca el estado ni los intentos)', f3.estado_pui === 'pendiente' && f3.intentos_pui === 0, JSON.stringify(f3));
+    const login = await http('POST', '/login', { body: { usuario: 'PUI', clave: p.pui_clave } });
+    caso('POST /login de la PUI rechaza al hotel de prueba (401)', login.status === 401);
+}
+
 async function pruebasRedisCaido(a) {
     console.log('\n── POST /check-ins con Redis caído');
     const parar = process.env.TEST_REDIS_PARAR;
@@ -298,6 +356,8 @@ async function pruebasRedisCaido(a) {
     try {
         const a = await crearHotel('A'); hoteles.push(a);
         const b = await crearHotel('B'); hoteles.push(b);
+        const m = await crearHotel('M'); hoteles.push(m);
+        const pr = await crearHotel('P', { esPrueba: true }); hoteles.push(pr);
         console.log(`Base URL: ${BASE_URL} · hoteles de prueba ${a.id} y ${b.id}`);
         await pruebasFolio(a);
         await pruebasCurpActiva(a, b);
@@ -310,6 +370,8 @@ async function pruebasRedisCaido(a) {
             urlSinDatosPersonales('/huespedes/buscar-por-nombre?nombre=Juan%20P%C3%A9rez') === '/huespedes/buscar-por-nombre?nombre=***');
         caso('otras URL no cambian', urlSinDatosPersonales('/check-ins?fecha=2026-10-19&limit=20') === '/check-ins?fecha=2026-10-19&limit=20');
         await pruebasMetodoCaptura(a);
+        await pruebasMedianoche(m);
+        await pruebasHotelDePrueba(pr);
         await pruebasRedisCaido(a);
     } catch (err) {
         fallas++;

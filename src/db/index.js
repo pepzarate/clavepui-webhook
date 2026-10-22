@@ -81,6 +81,16 @@ async function initDb() {
       ADD COLUMN IF NOT EXISTS checkin_v2 BOOLEAN NOT NULL DEFAULT FALSE;
     `);
 
+    // Hotel de prueba (p. ej. "HOTEL PRUEBA CLAVEPUI" en producción, para
+    // probar la interfaz con datos ficticios). Con TRUE: sus check-ins nunca
+    // se encolan ni se notifican a la PUI, el reencolador y el worker lo
+    // ignoran y POST /login (PUI gobierno) lo rechaza. Las métricas o
+    // reportes entre hoteles deben filtrar NOT es_prueba.
+    await client.query(`
+      ALTER TABLE hoteles
+      ADD COLUMN IF NOT EXISTS es_prueba BOOLEAN NOT NULL DEFAULT FALSE;
+    `);
+
     // Tabla principal: reportes activos recibidos desde la PUI
     await client.query(`
       CREATE TABLE IF NOT EXISTS reportes_activos (
@@ -378,6 +388,21 @@ async function initDb() {
     }
 
     await verificarRolTenantSeguro();
+
+    // Diagnóstico de zona horaria (2026-10-22): en producción "Últimos
+    // check-ins" mostró horas corridas. Si fecha_checkin no es timestamptz,
+    // la hora y el "hoy" dependen de la zona del proceso y de la sesión.
+    const tipoFecha = await client.query(
+      `SELECT data_type FROM information_schema.columns
+       WHERE table_name = 'check_ins' AND column_name = 'fecha_checkin'`
+    );
+    const zonaBd = await client.query(`SHOW timezone`);
+    logger.info('Zona horaria', {
+      proceso: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      tz_env: process.env.TZ ?? null,
+      sesion_bd: zonaBd.rows[0]?.TimeZone,
+      fecha_checkin: tipoFecha.rows[0]?.data_type,
+    });
 
     logger.info('Base de datos inicializada correctamente');
   } catch (err) {

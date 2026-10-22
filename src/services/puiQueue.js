@@ -126,7 +126,8 @@ async function reencolarPendientes() {
     let pendientes = 0;
     let encolados = 0;
     try {
-        const hoteles = await pool.query(`SELECT id, rfc FROM hoteles`);
+        // Los hoteles de prueba nunca se encolan (POST /check-ins ya los marca)
+        const hoteles = await pool.query(`SELECT id, rfc FROM hoteles WHERE NOT es_prueba`);
         recorrer: for (const hotel of hoteles.rows) {
             const { rows } = await withHotelContext(hotel.id, (client) => client.query(
                 `SELECT * FROM check_ins
@@ -174,6 +175,12 @@ async function yaNotificado(checkIn) {
     return r.rowCount === 0 || r.rows[0].estado_pui === 'enviado';
 }
 
+/** Defensa extra: un hotel de prueba nunca llega a la PUI aunque algo lo encole. */
+async function esHotelDePrueba(hotelId) {
+    const r = await pool.query(`SELECT es_prueba FROM hoteles WHERE id = $1`, [hotelId]);
+    return r.rows[0]?.es_prueba === true;
+}
+
 /**
  * Worker que procesa la cola y hace las llamadas reales a la PUI.
  * Se ejecuta en segundo plano mientras el servidor atiende requests.
@@ -188,6 +195,15 @@ const puiWorker = new Worker(
             checkinId: checkIn.id,
             intento: job.attemptsMade + 1,
         });
+
+        if (await esHotelDePrueba(checkIn.hotel_id)) {
+            logger.info('Hotel de prueba — no se notifica a la PUI', {
+                type: 'worker_pui',
+                checkinId: checkIn.id,
+                hotel_id: checkIn.hotel_id,
+            });
+            return;
+        }
 
         if (await yaNotificado(checkIn)) {
             logger.info('Check-in ya notificado o inexistente — se omite', {

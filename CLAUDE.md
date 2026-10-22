@@ -12,6 +12,129 @@ npm run dev  (nodemon — puerto 8080)
 Docker Redis: docker start clavepui-redis (en este WSL, `docker` a secas es el
 shim roto de Docker Desktop: usar `/snap/bin/docker`)
 
+## Sesión 2026-10-22 (tarea 4a de check-in v2) — hotel de prueba, zona horaria, logs
+
+### Hotel de prueba (`hoteles.es_prueba`)
+- **Columna:** `hoteles.es_prueba BOOLEAN NOT NULL DEFAULT FALSE`, en
+  `initDb()` con `ADD COLUMN IF NOT EXISTS`. Sin GRANT: `hoteles` no tiene
+  RLS.
+- **Un hotel de prueba nunca toca la PUI:**
+  - `POST /check-ins` lo guarda como `sin_reporte` y `encolado_pui = TRUE`,
+    y no encola nada;
+  - el reencolador lo salta (`WHERE NOT es_prueba`);
+  - el worker lo omite (`esHotelDePrueba()`) aunque alguien encole un job a
+    mano;
+  - `POST /login` (PUI gobierno) lo rechaza con 401 aunque la clave sea
+    correcta.
+- **Métricas:** cualquier métrica o reporte que cruce hoteles debe filtrar
+  `NOT es_prueba`. Hoy no hay ninguno; los reportes son por hotel.
+- **Scripts** (`src/scripts/`, comunes en `lib/hotelPrueba.js`):
+  - identifican el hotel por el RFC ficticio `PRUEBA000000`, se niegan a
+    tocarlo si no tiene `es_prueba = TRUE`, y trabajan con el contexto RLS
+    de ESE hotel (nunca con el bypass);
+  - nunca imprimen contraseñas ni la `pui_clave`.
+
+  | Script | Qué hace |
+  |---|---|
+  | `crear-hotel-prueba.js` | Idempotente. Hotel "HOTEL PRUEBA CLAVEPUI" con `checkin_v2 = TRUE`, `gov_pui_clave = NULL` y una `pui_clave` aleatoria; usuarios recepcionista y gerente. Contraseñas por `PRUEBA_PASS_RECEPCION` / `PRUEBA_PASS_GERENTE` (≥ 12, nunca en la línea de comandos); emails por `PRUEBA_EMAIL_*` (default `recepcion.prueba@` / `gerente.prueba@clavepui.com`) |
+  | `datos-hotel-prueba.js [--dias=7] [--con-alertas]` | Borra y vuelve a cargar datos inventados y reproducibles: nombres y CURPs inventadas con dígito verificador válido, check-ins de 08:00 a 21:00 hora MX, un `error`, un `pendiente`, folios `PRB-…`, una CURP repetida hoy (hab. 112 y 305), una edición, 8 huéspedes frecuentes y, con `--con-alertas`, 3 reportes de búsqueda (2 activos) |
+  | `borrar-datos-hotel-prueba.js` | Simulacro por defecto. `--confirmar` borra check-ins, ediciones, frecuentes y reportes; con `--incluir-hotel` también usuarios, suscripciones y el hotel |
+
+- **Pruebas** (`npm run test:checkin-v2`, ahora 61): estado y encolado al
+  registrar, ningún job, el reencolador y el worker lo ignoran, y
+  `POST /login` responde 401.
+- **Estado en producción: NO creado todavía.** Pasos para hacerlo:
+  1. Desplegar primero este backend: `initDb()` crea la columna. Sin ella,
+     los scripts paran con "despliega primero el backend".
+  2. Desde `clavepui-webhook/`, capturar las contraseñas sin que queden en
+     el historial (`read -s` no las muestra ni las guarda; las variables
+     solo viven en esa terminal):
+     ```bash
+     read -rs -p "Contraseña recepción: " PRUEBA_PASS_RECEPCION; echo; export PRUEBA_PASS_RECEPCION
+     read -rs -p "Contraseña gerente: "   PRUEBA_PASS_GERENTE;   echo; export PRUEBA_PASS_GERENTE
+     railway run -- sh -c 'DATABASE_URL="$DATABASE_PUBLIC_URL" PGSSL=1 node src/scripts/crear-hotel-prueba.js'
+     railway run -- sh -c 'DATABASE_URL="$DATABASE_PUBLIC_URL" PGSSL=1 node src/scripts/datos-hotel-prueba.js --con-alertas'
+     unset PRUEBA_PASS_RECEPCION PRUEBA_PASS_GERENTE
+     ```
+     Las contraseñas se pueden generar en el gestor de contraseñas y
+     pegarlas en el `read`, o con `openssl rand -base64 18`.
+  3. Borrar solo sus datos:
+     `railway run -- sh -c 'DATABASE_URL="$DATABASE_PUBLIC_URL" PGSSL=1 node src/scripts/borrar-datos-hotel-prueba.js --confirmar'`.
+
+### Zona horaria
+- **Reporte:** en producción, "Últimos check-ins" mostró horas
+  00:22–00:25.
+- **Lógica revisada:** `fecha_checkin` es `timestamptz`, y todo filtro por
+  día usa `DATE(fecha_checkin AT TIME ZONE 'America/Mexico_City')`. Es
+  correcta con el proceso y la sesión de BD en UTC o en MX (pruebas con
+  `TZ=UTC` y `PGOPTIONS="-c TimeZone=UTC"`).
+- **Lo nuevo:** el servidor ya no deja la hora al navegador.
+  `utils/zonaHoraria.js` (`zonaDelHotel`, `conHoraLocal`) agrega
+  `fecha_local` y `hora_local` (HH:MM, 24 h) a:
+  - `GET /check-ins`;
+  - la respuesta de `POST /check-ins`;
+  - `curp-activa`, que devuelve `hora_local`.
+
+  Lo demás no cambia: checkin.astro recibe los mismos campos de siempre más
+  esos dos. Pruebas a las 00:01 de hoy y 23:59 de ayer (hora MX) en lista,
+  resumen y curp-activa.
+- **Causa del 00:22 todavía sin confirmar.** Con `timestamptz` solo puede
+  venir de una columna con otro tipo en producción combinada con el `TZ`
+  del proceso, o de check-ins hechos de verdad a medianoche. Para salir de
+  dudas, al arrancar se loguea `Zona horaria` (`tz_env`, `sesion_bd`, tipo
+  de la columna), y hay un diagnóstico de solo lectura que imprime los
+  últimos 10 check-ins en UTC y en hora MX, sin datos personales:
+  `railway run -- sh -c 'DATABASE_URL="$DATABASE_PUBLIC_URL" PGSSL=1 node src/scripts/diagnostico-zona-horaria.js 1'`
+  (el último argumento es el hotel_id).
+- **`hoteles` no guarda zona horaria:** todo usa `America/Mexico_City`.
+  **No se agregó la columna** (decisión pendiente). Hace falta para un
+  hotel en Quintana Roo (UTC-5 fijo), Sonora (UTC-7 fijo) o Baja
+  California (UTC-8 con horario de verano). `zonaDelHotel()` ya lee
+  `hotel.zona_horaria` si existe. Faltaría:
+  - la columna (`TEXT NOT NULL DEFAULT 'America/Mexico_City'`);
+  - cambiar los `AT TIME ZONE` fijos por el de la columna;
+  - que el frontend use la zona del hotel para calcular "hoy".
+
+### Log de solicitudes con datos personales
+- **Dónde vive:** el `auditLogger` escribe a la salida estándar, que
+  guarda Railway (`railway logs`). **No está en la BD:** `logs_auditoria`
+  existe, pero ningún código la llena.
+- **Qué guardaba:** hasta el commit `3acfe11` (tarea 2b, 2026-10-19)
+  quedaban completos nombre, apellidos, teléfono y correo del body, y la
+  URL completa (`curp=` y `nombre=`). Desde entonces todo eso se
+  enmascara.
+- **Contarlos** (solo lectura, imprime conteos y rango de fechas, nunca
+  los datos):
+  ```bash
+  railway deployment list
+  railway logs <DEPLOYMENT_ID> --json --lines 100000 --filter "Solicitud" | node src/scripts/contar-logs-personales.js
+  ```
+- **Propuesta (sin ejecutar):** Railway no permite borrar líneas sueltas.
+  Opciones:
+  - esperar a que expire la retención del plan;
+  - borrar los deployments anteriores a `3acfe11`, lo que se lleva sus
+    logs.
+
+  No se ha modificado nada en producción. Ver BACKLOG #35.
+
+### Otros
+- `POST /check-ins` y `GET /check-ins` no cambiaron de contrato (solo
+  campos nuevos).
+- Semgrep (`p/security-audit`, `p/secrets`, `p/owasp-top-ten`,
+  `p/javascript`) sobre los cambios de las tareas 1 a 4a. Los 3 avisos
+  de backend no requieren cambio:
+  - **`cors-misconfiguration` en `app.js`:** falso positivo, el origen se
+    compara contra una lista fija;
+  - **`rejectUnauthorized: false` en `config/index.js`:** ya existía, es la
+    conexión de Railway;
+  - **`rejectUnauthorized: false` en los dos scripts nuevos:** mismo motivo
+    (proxy público de Railway con certificado propio); solo se activa con
+    `NODE_ENV=production` o `PGSSL`.
+- **`npm test` (`tests/test-endpoints.js`) es una prueba vieja.** Apunta a
+  :3000 (`TEST_URL`) y necesita `PUI_CLAVE` de un hotel local. Marca ❌ en
+  5 casos que sí responden lo esperado (401/400/405): el fallo está en la
+  comparación del propio script, no en el backend.
+
 ## Sesión 2026-10-19 (tarea 3 de check-in v2) — método de captura
 
 Estadística de cómo se captura la CURP en `/checkin-nuevo` (escáner por
@@ -559,6 +682,8 @@ src/
 ## Base de datos — tablas
 - hoteles          — id, nombre, rfc, pui_clave, gov_pui_clave, activo,
                      checkin_v2 (flag de /checkin-nuevo, default false)
+                     es_prueba (hotel de prueba: nunca toca la PUI, ver
+                     sesión 2026-10-22)
 - usuarios         — id, hotel_id, nombre, email, password_hash, rol, activo
 - check_ins        — id, hotel_id, curp, nombre, primer_apellido, segundo_apellido,
                      fecha_nacimiento, lugar_nacimiento, sexo_asignado,

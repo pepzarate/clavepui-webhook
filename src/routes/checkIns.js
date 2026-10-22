@@ -4,6 +4,7 @@ const { logger } = require('../middleware/logger');
 const { requireUsuarioStaff } = require('../middleware/auth');
 const { validarFormatoCURP, parsearCURP, enmascararCURP } = require('../utils/curp');
 const { intentarEncolar } = require('../services/puiQueue');
+const { conHoraLocal, zonaDelHotel } = require('../utils/zonaHoraria');
 
 const router = express.Router();
 
@@ -21,7 +22,7 @@ async function requireHotel(req, res, next) {
 
     try {
         const result = await pool.query(
-            `SELECT id, nombre, rfc
+            `SELECT id, nombre, rfc, es_prueba
        FROM hoteles
        WHERE pui_clave = $1 AND activo = TRUE`,
             [apiKey]
@@ -128,7 +129,7 @@ router.post('/check-ins', requireHotel, async (req, res) => {
                     fecha_nacimiento, lugar_nacimiento, sexo_asignado,
                     telefono, correo, registrado_por, numero_habitacion, folio_pms, estado_pui,
                     encolado_pui, metodo_captura, editado_tras_escaneo)
-                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'pendiente',FALSE,$14,$15)
+                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$16,$17,$14,$15)
                 RETURNING *`,
                 [
                     req.hotel.id,
@@ -146,6 +147,9 @@ router.post('/check-ins', requireHotel, async (req, res) => {
                     folio_pms || null,
                     metodo_captura ?? null,
                     editado_tras_escaneo ?? null,
+                    // Hotel de prueba: nunca va a la PUI (ni se encola)
+                    req.hotel.es_prueba ? 'sin_reporte' : 'pendiente',
+                    Boolean(req.hotel.es_prueba),
                 ]
             );
 
@@ -175,7 +179,7 @@ router.post('/check-ins', requireHotel, async (req, res) => {
         // ya está guardado, así que esto nunca tumba ni cuelga la respuesta
         // (máx. PUI_ENCOLAR_TIMEOUT_MS). Si Redis no responde, queda
         // pendiente y el reencolador lo manda después (services/puiQueue.js).
-        await intentarEncolar({
+        if (!req.hotel.es_prueba) await intentarEncolar({
             ...checkIn,
             rfc_hotel: req.hotel.rfc,
             // El reporte_pui_id se llenará cuando el gobierno
@@ -193,7 +197,8 @@ router.post('/check-ins', requireHotel, async (req, res) => {
         return res.status(201).json({
             message: 'Check-in registrado correctamente',
             aviso_curp_duplicada: curpDuplicadaHoy,
-            checkin: {
+            // fecha_local/hora_local: agregados (checkin.astro no los usa)
+            checkin: conHoraLocal({
                 id: checkIn.id,
                 curp: enmascararCURP(curp),
                 nombre: checkIn.nombre,
@@ -206,7 +211,7 @@ router.post('/check-ins', requireHotel, async (req, res) => {
                 sexo_asignado: sexo,
                 numero_habitacion: checkIn.numero_habitacion,
                 folio_pms: checkIn.folio_pms,
-            },
+            }, zonaDelHotel(req.hotel)),
         });
 
     } catch (err) {
@@ -405,6 +410,7 @@ router.get('/check-ins/curp-activa', requireHotel, requireUsuarioStaff, async (r
             total_hoy: result.rowCount,
             habitacion: ultimo?.numero_habitacion ?? null,
             fecha_checkin: ultimo?.fecha_checkin ?? null,
+            hora_local: ultimo ? conHoraLocal(ultimo, zonaDelHotel(req.hotel)).hora_local : null,
         });
     } catch (err) {
         logger.error('Error consultando CURP activa', { error: err.message });
@@ -503,10 +509,14 @@ router.get('/check-ins', requireHotel, async (req, res) => {
         });
 
         // Enmascarar CURPs en la respuesta
-        const checkins = result.rows.map(row => ({
+        // fecha_local/hora_local: hora del hotel calculada aquí, para no
+        // depender de la zona del navegador (campos agregados; checkin.astro
+        // y historial.astro siguen leyendo fecha_checkin como antes)
+        const zona = zonaDelHotel(req.hotel);
+        const checkins = result.rows.map(row => conHoraLocal({
             ...row,
             curp: enmascararCURP(row.curp),
-        }));
+        }, zona));
 
         return res.status(200).json({
             total: Number.parseInt(countResult.rows[0].count),
