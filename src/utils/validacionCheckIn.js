@@ -1,5 +1,5 @@
 /**
- * Validación de los campos de texto libre de un check-in (tarea 4b).
+ * Validación de los campos de texto libre de un check-in (tareas 4b y 4c).
  *
  * Además de escapar en el frontend, el servidor rechaza con 400 lo que no
  * puede ser un nombre, un folio o una habitación, así no se guarda HTML ni
@@ -10,19 +10,52 @@
  *   Ñ y Ü), espacios, guion, apóstrofo (' y ’) y punto. Máx. 50 caracteres
  *   (el límite de `nombre` en el Manual PUI, sección 8.2). Ejemplos válidos:
  *   "JOSÉ MARÍA", "D'ARTAGNAN", "MARÍA-JOSÉ", "MA. GUADALUPE", "MÜLLER".
- * - Folio PMS: letras ASCII, dígitos y guion. Máx. 40.
- * - Habitación: letras ASCII, dígitos y guion. Máx. 20.
+ * - Folio PMS y habitación: letras ASCII, dígitos y los símbolos de
+ *   SIMBOLOS_FOLIO / SIMBOLOS_HABITACION. Máx. 40 / 20.
+ *   Para permitir otro símbolo (p. ej. "/", "." o "#" si aparecen en datos
+ *   reales de algún PMS) basta agregarlo a la lista: el patrón y el mensaje
+ *   se arman solos. Los de PROHIBIDOS (< > " ' ` = & : ;) no se pueden
+ *   agregar: sirven para inyectar HTML o JS y el módulo no carga.
  *
  * Vacío, null o ausente sigue siendo válido (checkin.astro solo exige la
  * CURP). No recorta ni cambia mayúsculas: se valida el valor tal como se
  * guardará.
  */
+const SIMBOLOS_FOLIO = ['-'];
+const SIMBOLOS_HABITACION = ['-'];
+
+const PROHIBIDOS = new Set(['<', '>', '"', "'", '`', '=', '&', ':', ';']);
+const NOMBRES_SIMBOLOS = { '-': 'guion', '/': 'diagonal', '.': 'punto', '#': 'gato (#)', '_': 'guion bajo', ' ': 'espacio' };
+
+/** Regla para folio/habitación: [A-Za-z0-9] + los símbolos dados. */
+function reglaCodigo(simbolos, max) {
+    for (const c of simbolos) {
+        if (typeof c !== 'string' || [...c].length !== 1 || PROHIBIDOS.has(c)) {
+            throw new Error(`Símbolo no permitido en la regla de validación: ${JSON.stringify(c)}`);
+        }
+    }
+    // Dentro de [...] solo \ ] [ ^ y - tienen significado: se escapan
+    const clase = simbolos.map((c) => c.replace(/[\\\]\[^-]/g, '\\$&')).join('');
+    const nombres = simbolos.map((c) => NOMBRES_SIMBOLOS[c] ?? `"${c}"`);
+    return {
+        max,
+        patron: new RegExp(`^[A-Za-z0-9${clase}]+$`),
+        permitido: `letras sin acento, números${nombres.length ? ` y ${nombres.join(', ')}` : ''}`,
+    };
+}
+
+const REGLA_NOMBRE = {
+    max: 50,
+    patron: /^[\p{L}\p{M}' ’.-]+$/u,
+    permitido: 'letras, espacios, guion, apóstrofo y punto',
+};
+
 const REGLAS = {
-    nombre: { max: 50, patron: /^[\p{L}\p{M}' ’.-]+$/u, permitido: 'letras, espacios, guion, apóstrofo y punto' },
-    primer_apellido: { max: 50, patron: /^[\p{L}\p{M}' ’.-]+$/u, permitido: 'letras, espacios, guion, apóstrofo y punto' },
-    segundo_apellido: { max: 50, patron: /^[\p{L}\p{M}' ’.-]+$/u, permitido: 'letras, espacios, guion, apóstrofo y punto' },
-    folio_pms: { max: 40, patron: /^[A-Za-z0-9-]+$/, permitido: 'letras sin acento, números y guion' },
-    numero_habitacion: { max: 20, patron: /^[A-Za-z0-9-]+$/, permitido: 'letras sin acento, números y guion' },
+    nombre: REGLA_NOMBRE,
+    primer_apellido: REGLA_NOMBRE,
+    segundo_apellido: REGLA_NOMBRE,
+    folio_pms: reglaCodigo(SIMBOLOS_FOLIO, 40),
+    numero_habitacion: reglaCodigo(SIMBOLOS_HABITACION, 20),
 };
 
 const ETIQUETAS = {
@@ -33,7 +66,7 @@ const ETIQUETAS = {
     numero_habitacion: 'La habitación',
 };
 
-/** Mensaje de error del primer campo inválido, o null si todos cumplen. */
+/** { campo, error } del primer campo inválido, o null si todos cumplen. */
 function validarCamposTexto(body, campos = Object.keys(REGLAS)) {
     for (const campo of campos) {
         const valor = body?.[campo];
@@ -50,4 +83,4 @@ function validarCamposTexto(body, campos = Object.keys(REGLAS)) {
     return null;
 }
 
-module.exports = { validarCamposTexto, REGLAS };
+module.exports = { validarCamposTexto, reglaCodigo, REGLAS, SIMBOLOS_FOLIO, SIMBOLOS_HABITACION };

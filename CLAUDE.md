@@ -12,6 +12,47 @@ npm run dev  (nodemon — puerto 8080)
 Docker Redis: docker start clavepui-redis (en este WSL, `docker` a secas es el
 shim roto de Docker Desktop: usar `/snap/bin/docker`)
 
+## Sesión 2026-10-22 (tarea 4c, parte A) — ajustar la validación antes de desplegar
+
+**Resultado en producción** del bloque 2 de `contar-posibles-inyecciones.sql`,
+reportado por el usuario: 0 inyecciones. Hay 8 filas que la regla de la 4b
+rechazaría:
+
+| Tabla | Hotel | Campo | Ids |
+|---|---|---|---|
+| check_ins | 1 | folio | 344 |
+| check_ins | 1 | nombre | 343, 1458 |
+| check_ins | 2 | habitación | 565 |
+| check_ins | 3 | segundo apellido | 105 |
+| huespedes_frecuentes | 1 | nombre | 274, 1389 |
+| huespedes_frecuentes | 3 | segundo apellido | 36 |
+
+**El backend de la 4b todavía no se despliega.**
+
+- **Diagnóstico de esas filas:** `src/scripts/sql/caracteres-no-permitidos.sql`.
+  - Es solo lectura (transacción `READ ONLY` con ROLLBACK).
+  - Las ids están en el CTE `revisar`.
+  - Por fila y campo devuelve el largo y cada carácter no permitido, con
+    categoría, código Unicode y cuántas veces aparece. Categorías: dígito,
+    letra con acento/ñ, espacio, espacio duro, guion tipográfico, acento
+    combinable, "símbolo /" (solo los símbolos ASCII se muestran tal cual)
+    y otro símbolo.
+  - Nunca muestra el valor.
+  - "Letra" se decide por rango Unicode, no con `[[:alpha:]]`, y al final
+    imprime el locale de la base.
+  - Para correrla:
+    `railway run -- sh -c 'psql "$DATABASE_PUBLIC_URL" -X -q -f src/scripts/sql/caracteres-no-permitidos.sql'`
+- **Regla de folio y habitación ampliable** (`utils/validacionCheckIn.js`):
+  - los símbolos permitidos además de `[A-Za-z0-9]` están en
+    `SIMBOLOS_FOLIO` / `SIMBOLOS_HABITACION` (hoy `['-']`);
+  - `reglaCodigo()` arma el patrón y el mensaje;
+  - agregar `< > " ' \` = & : ;` lanza un error al cargar el módulo;
+  - el frontend tiene la copia en `clavepui-frontend/src/utils/validacionCampos.ts`,
+    y hay que cambiar las dos.
+- **400 de validación:** sigue siendo `{ error, campo }`. El frontend
+  marca ese campo.
+- **Pruebas:** 84 (3 nuevas de la regla ampliable).
+
 ## Sesión 2026-10-22 (tarea 4b) — seguridad y cumplimiento antes del rediseño
 
 - **Validación de texto libre en `POST /check-ins` y

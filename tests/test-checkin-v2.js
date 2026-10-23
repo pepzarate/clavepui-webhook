@@ -382,6 +382,15 @@ async function pruebasValidacion(a) {
         caso(`400 para ${campo} inválido (${JSON.stringify(datos).slice(0, 40)})`, r.status === 400 && r.datos.campo === campo, `${r.status} ${r.datos.campo ?? ''}`);
     }
 
+    // Regla de folio/habitación ampliable (tarea 4c): agregar símbolos a la lista
+    const { reglaCodigo } = require('../src/utils/validacionCheckIn');
+    const ampliada = reglaCodigo(['-', '/', '.', '#'], 40);
+    caso('regla ampliable acepta los símbolos agregados', ampliada.patron.test('F/12.3#A-1'));
+    caso('regla ampliable sigue rechazando lo demás', !ampliada.patron.test('F<1') && !ampliada.patron.test('F 1'));
+    let rechazoProhibido = false;
+    try { reglaCodigo(['<'], 10); } catch { rechazoProhibido = true; }
+    caso('la regla no deja agregar < > " \' ` = & : ;', rechazoProhibido);
+
     const base = await checkIn(a, { curp: CURP_B, numero_habitacion: '300' });
     const ed1 = await http('POST', `/check-ins/${base.datos.checkin.id}/editar`, { hotel: a, jwtDe: a, body: { numero_habitacion: '30<1' } });
     caso('editar: 400 para habitación inválida', ed1.status === 400 && ed1.datos.campo === 'numero_habitacion', String(ed1.status));
