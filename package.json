@@ -7,7 +7,8 @@
     "start": "node src/app.js",
     "dev": "nodemon src/app.js",
     "test": "node tests/test-endpoints.js",
-    "test:checkin-v2": "node tests/test-checkin-v2.js"
+    "test:checkin-v2": "node tests/test-checkin-v2.js",
+    "test:pui-fases": "node tests/test-pui-fases.js"
   },
   "keywords": [],
   "author": "",

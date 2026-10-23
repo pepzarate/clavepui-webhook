@@ -1,15 +1,21 @@
-const { Queue, Worker } = require('bullmq');
-const axios = require('axios');
+const { Queue, Worker, UnrecoverableError } = require('bullmq');
 const config = require('../config');
 const { pool, withHotelContext } = require('../db');
 const { logger } = require('../middleware/logger');
 const { enmascararCURP } = require('../utils/curp');
 const { notificarGerentes } = require('./webPush');
+const { ErrorPuiPermanente } = require('./puiApi');
+const {
+    notificarFase3, hotelParaPui, marcarCheckInEnviado, reencolarBusquedas, barridoFase3,
+} = require('./puiBusqueda');
 
 // Configuración de conexión a Redis
 const connection = {
     url: process.env.REDIS_URL || 'redis://localhost:6379',
 };
+// Prefijo de las llaves de BullMQ. Solo las pruebas lo cambian
+// (PUI_COLA_PREFIJO) para no mezclar sus jobs con los de un backend corriendo.
+const prefix = process.env.PUI_COLA_PREFIJO || 'bull';
 
 // Feature 18 (alertas push) pausada temporalmente — ver CLAUDE.md.
 // Reactivar: volver a poner esto en true. El flujo de cumplimiento con la
@@ -23,6 +29,7 @@ const PUSH_NOTIFICATIONS_ENABLED = false;
 // Worker usa su propia conexión, con la configuración de siempre.
 const puiQueue = new Queue('pui-notificaciones', {
     connection: { ...connection, enableOfflineQueue: false },
+    prefix,
 });
 
 // jobId determinista: si el mismo check-in se encola dos veces (la request y
@@ -156,10 +163,51 @@ async function reencolarPendientes() {
 }
 
 function iniciarReencolador() {
-    reencolarPendientes();
-    const timer = setInterval(reencolarPendientes, config.pui.reencolarIntervaloMs);
+    const vuelta = async () => {
+        await reencolarPendientes();
+        await reencolarBusquedas(); // fases 1 y 2 que no se encolaron o quedaron en error
+    };
+    vuelta();
+    const timer = setInterval(vuelta, config.pui.reencolarIntervaloMs);
     timer.unref();
+    // Fase 3 periódica (resincronización): el manual sugiere cada hora,
+    // cada 4 horas o una vez al día; aquí cada config.pui.barridoMs (1 h)
+    const barrido = setInterval(barridoFase3, config.pui.barridoMs);
+    barrido.unref();
     return timer;
+}
+
+/**
+ * Tras editar un check-in (habitación/folio): revisar de nuevo la fase 3,
+ * porque es un registro modificado. jobId único por edición; si Redis no
+ * responde, el barrido periódico lo recoge. Nunca lanza.
+ */
+async function encolarEdicion(checkIn) {
+    const add = puiQueue.add(
+        'notificar-coincidencia',
+        { checkIn: { id: checkIn.id, hotel_id: checkIn.hotel_id }, motivo: 'edicion' },
+        {
+            jobId: `${jobIdDe(checkIn.id)}-edicion-${Date.now()}`,
+            attempts: 3,
+            backoff: { type: 'exponential', delay: 5000 },
+            removeOnComplete: { count: 100 },
+            removeOnFail: { count: 50 },
+        }
+    );
+    let timer;
+    try {
+        await Promise.race([add, new Promise((_, rej) => { timer = setTimeout(() => rej(new Error('timeout')), config.pui.encolarTimeoutMs); })]);
+        return true;
+    } catch (err) {
+        add.catch(() => {});
+        logger.warn('Revisión de edición pendiente (la toma el barrido)', {
+            type: 'cola_pui_pendiente', checkinId: checkIn.id, hotel_id: checkIn.hotel_id,
+            motivo: err.message === 'timeout' ? 'timeout' : 'redis_no_disponible',
+        });
+        return false;
+    } finally {
+        clearTimeout(timer);
+    }
 }
 
 /**
@@ -188,52 +236,60 @@ async function esHotelDePrueba(hotelId) {
 const puiWorker = new Worker(
     'pui-notificaciones',
     async (job) => {
-        const { checkIn } = job.data;
+        const { checkIn: datosJob, motivo } = job.data;
+        const edicion = motivo === 'edicion';
 
         logger.info('Procesando notificación PUI', {
             type: 'worker_pui',
-            checkinId: checkIn.id,
+            checkinId: datosJob.id,
             intento: job.attemptsMade + 1,
+            ...(edicion ? { motivo } : {}),
         });
 
-        if (await esHotelDePrueba(checkIn.hotel_id)) {
+        if (await esHotelDePrueba(datosJob.hotel_id)) {
             logger.info('Hotel de prueba — no se notifica a la PUI', {
                 type: 'worker_pui',
-                checkinId: checkIn.id,
-                hotel_id: checkIn.hotel_id,
+                checkinId: datosJob.id,
+                hotel_id: datosJob.hotel_id,
             });
             return;
         }
 
-        if (await yaNotificado(checkIn)) {
+        // Una edición se revisa aunque el check-in ya esté 'enviado': es un
+        // registro modificado (manual 6.4.c). La huella evita repetir avisos.
+        if (!edicion && (await yaNotificado(datosJob))) {
             logger.info('Check-in ya notificado o inexistente — se omite', {
                 type: 'worker_pui',
-                checkinId: checkIn.id,
-                hotel_id: checkIn.hotel_id,
+                checkinId: datosJob.id,
+                hotel_id: datosJob.hotel_id,
             });
             return;
         }
 
+        // Siempre la fila actual (el job puede traer datos de antes de una edición)
+        const fila = await withHotelContext(datosJob.hotel_id, (client) => client.query(
+            `SELECT * FROM check_ins WHERE id = $1 AND hotel_id = $2`,
+            [datosJob.id, datosJob.hotel_id]
+        ));
+        const checkIn = fila.rows[0];
+        if (!checkIn) return;
+
         try {
-            // Buscar si hay reportes activos que coincidan con esta CURP.
-            // Sin filtro de hotel_id en el texto de la query a propósito: la
-            // policy de RLS (contexto seteado abajo) es la que garantiza que
-            // solo se vean reportes del mismo hotel del check-in.
+            const { hotel, motivo: sinPui } = await hotelParaPui(checkIn.hotel_id);
             const reportes = await withHotelContext(checkIn.hotel_id, (client) => client.query(
-                `SELECT id, curp FROM reportes_activos
-         WHERE curp = $1 AND activo = TRUE`,
-                [checkIn.curp]
+                `SELECT COUNT(*)::int AS n FROM reportes_activos
+                 WHERE hotel_id = $1 AND curp = $2 AND activo = TRUE`,
+                [checkIn.hotel_id, checkIn.curp]
             ));
 
-            if (reportes.rowCount === 0) {
-                // No hay reporte activo para esta CURP — no notificar
-                // Marcar como enviado porque no hay nada que reportar
-                await withHotelContext(checkIn.hotel_id, (client) => client.query(
-                    `UPDATE check_ins SET estado_pui = 'sin_reporte'
-           WHERE id = $1`,
-                    [checkIn.id]
-                ));
-
+            if (reportes.rows[0].n === 0) {
+                // Sin reporte activo para esta CURP: nada que notificar
+                if (!edicion) {
+                    await withHotelContext(checkIn.hotel_id, (client) => client.query(
+                        `UPDATE check_ins SET estado_pui = 'sin_reporte' WHERE id = $1`,
+                        [checkIn.id]
+                    ));
+                }
                 logger.info('Sin reporte activo para esta CURP — sin acción', {
                     type: 'worker_pui',
                     checkinId: checkIn.id,
@@ -241,72 +297,39 @@ const puiWorker = new Worker(
                 return;
             }
 
-            // Hay reporte activo — notificar coincidencia a la PUI
-            for (const reporte of reportes.rows) {
-                // 1. Obtener token de la PUI
-                const hotelResult = await pool.query(
-                    `SELECT gov_pui_clave FROM hoteles WHERE id = $1`,
-                    [checkIn.hotel_id]
-                );
+            if (!hotel) {
+                // Hay reporte pero el hotel no tiene enlace con la PUI: no se
+                // notifica ni se reintenta (no se arregla solo)
+                await withHotelContext(checkIn.hotel_id, (client) => client.query(
+                    `UPDATE check_ins SET estado_pui = 'error', ultimo_error = $2 WHERE id = $1`,
+                    [checkIn.id, `No se notificó: ${sinPui}`]
+                ));
+                logger.warn('Coincidencia sin enlace con la PUI', { type: 'worker_pui', checkinId: checkIn.id, motivo: sinPui });
+                return;
+            }
 
-                if (hotelResult.rowCount === 0 || !hotelResult.rows[0].gov_pui_clave) {
-                    throw new Error(`Hotel ${checkIn.hotel_id} no tiene gov_pui_clave configurada`);
-                }
+            // Fase 3: un aviso por reporte activo (idempotente, ver puiNotificaciones.js)
+            const r = await notificarFase3(hotel, checkIn);
 
-                const govClave = hotelResult.rows[0].gov_pui_clave;
-
-                const loginRes = await axios.post(
-                    'https://www.api.plataformadebusqueda.gob.mx/api/2_3_0/login',
-                    {
-                        institucion_id: checkIn.rfc_hotel,
-                        clave: govClave,
-                    },
-                    { timeout: 10000 }
-                );
-
-                const token = loginRes.data.token;
-
-                // 2. Notificar coincidencia
-                await axios.post(
-                    'https://www.api.plataformadebusqueda.gob.mx/api/2_3_0/notificar-coincidencia',
-                    {
-                        id: reporte.id,
-                        curp: checkIn.curp,
-                        nombre: checkIn.nombre,
-                        primer_apellido: checkIn.primer_apellido,
-                        segundo_apellido: checkIn.segundo_apellido,
-                        fecha_nacimiento: checkIn.fecha_nacimiento,
-                        lugar_nacimiento: checkIn.lugar_nacimiento,
-                        sexo_asignado: checkIn.sexo_asignado,
-                        institucion_id: checkIn.rfc_hotel,
-                        fase_busqueda: '3',
-                        tipo_evento: 'Check-in hotelero',
-                        fecha_evento: new Date().toISOString().split('T')[0],
-                    },
-                    {
-                        headers: { Authorization: `Bearer ${token}` },
-                        timeout: 10000,
-                    }
-                );
-
+            if (r.coincidencias > 0) {
+                await marcarCheckInEnviado(checkIn.hotel_id, checkIn.id);
                 logger.info('Coincidencia notificada a PUI', {
                     type: 'pui_coincidencia',
                     checkinId: checkIn.id,
-                    reporteId: reporte.id,
+                    reportes: r.coincidencias,
                 });
+            } else if (r.rechazos.length > 0) {
+                await withHotelContext(checkIn.hotel_id, (client) => client.query(
+                    `UPDATE check_ins SET estado_pui = 'error', intentos_pui = intentos_pui + 1,
+                            ultimo_error = 'La PUI rechazó el aviso (400): revisar pui_notificaciones'
+                     WHERE id = $1`,
+                    [checkIn.id]
+                ));
+                return;
             }
 
-            // 3. Actualizar estado
-            await withHotelContext(checkIn.hotel_id, (client) => client.query(
-                `UPDATE check_ins
-         SET estado_pui   = 'enviado',
-             intentos_pui = intentos_pui + 1
-         WHERE id = $1`,
-                [checkIn.id]
-            ));
-
-            // 4. Alertar a los gerentes del hotel — coincidencia con persona buscada
-            if (PUSH_NOTIFICATIONS_ENABLED) {
+            // Alertar a los gerentes del hotel — coincidencia con persona buscada
+            if (PUSH_NOTIFICATIONS_ENABLED && r.coincidencias > 0) {
                 notificarGerentes(checkIn.hotel_id, {
                     title: 'Alerta PUI — coincidencia detectada',
                     body: `CURP ${enmascararCURP(checkIn.curp)} coincide con un reporte activo de búsqueda.`,
@@ -317,14 +340,13 @@ const puiWorker = new Worker(
                     });
                 });
             }
-
         } catch (err) {
             await withHotelContext(checkIn.hotel_id, (client) => client.query(
                 `UPDATE check_ins
-         SET estado_pui   = 'error',
-             intentos_pui = intentos_pui + 1,
-             ultimo_error = $2
-         WHERE id = $1`,
+                 SET estado_pui   = 'error',
+                     intentos_pui = intentos_pui + 1,
+                     ultimo_error = $2
+                 WHERE id = $1`,
                 [checkIn.id, err.message]
             ));
 
@@ -334,10 +356,12 @@ const puiWorker = new Worker(
                 error: err.message,
             });
 
+            // Credenciales rechazadas o error de configuración: reintentar no sirve
+            if (err instanceof ErrorPuiPermanente) throw new UnrecoverableError(err.message);
             throw err;
         }
     },
-    { connection, concurrency: 5 }
+    { connection, concurrency: 5, prefix }
 );
 
 puiWorker.on('completed', (job) => {
@@ -357,5 +381,7 @@ module.exports = {
     intentarEncolar,
     reencolarPendientes,
     iniciarReencolador,
+    encolarEdicion,
     jobIdDe,
+    puiWorker,
 };

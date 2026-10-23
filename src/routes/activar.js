@@ -2,6 +2,7 @@ const express = require('express');
 const { withHotelContext } = require('../db');
 const { requireAuth } = require('../middleware/auth');
 const { logger } = require('../middleware/logger');
+const { intentarEncolarBusqueda } = require('../services/puiBusqueda');
 
 const router = express.Router();
 
@@ -30,6 +31,12 @@ function validatePayload(body) {
     if (body.fecha_nacimiento &&
         !/^\d{4}-\d{2}-\d{2}$/.test(body.fecha_nacimiento)) {
         errors.push("'fecha_nacimiento' debe estar en formato YYYY-MM-DD");
+    }
+
+    // Manual 8.2: YYYY-MM-DD; puede venir vacía o nula (entonces se omite la fase 2)
+    if (body.fecha_desaparicion &&
+        (typeof body.fecha_desaparicion !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(body.fecha_desaparicion))) {
+        errors.push("'fecha_desaparicion' debe estar en formato YYYY-MM-DD");
     }
 
     if (body.sexo_asignado && !/^[MHX]$/.test(body.sexo_asignado)) {
@@ -67,7 +74,7 @@ router.post('/activar-reporte', requireAuth, async (req, res) => {
          fecha_nacimiento, fecha_desaparicion, lugar_nacimiento,
          sexo_asignado, telefono, correo, raw_payload, hotel_id, activo)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,TRUE)
-       ON CONFLICT (id) DO UPDATE SET
+       ON CONFLICT (hotel_id, id) DO UPDATE SET
          activo = TRUE,
          hotel_id = $13,
          raw_payload = $12`,
@@ -87,6 +94,11 @@ router.post('/activar-reporte', requireAuth, async (req, res) => {
             curp: curp.substring(0, 4) + '***',
             ip: req.ip,
         });
+
+        // Fases 1 y 2 (manual 6.4) en segundo plano: no se espera a Redis
+        // para responder al gobierno. Si no se encola, el reencolador lo toma
+        // (busqueda_estado = 'pendiente').
+        intentarEncolarBusqueda(hotel_id, id);
 
         return res.status(200).json({
             message: 'La solicitud de activación del reporte de búsqueda se recibió correctamente.'

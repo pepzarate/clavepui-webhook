@@ -12,6 +12,166 @@ npm run dev  (nodemon — puerto 8080)
 Docker Redis: docker start clavepui-redis (en este WSL, `docker` a secas es el
 shim roto de Docker Desktop: usar `/snap/bin/docker`)
 
+## Sesión 2026-10-22 (tarea 4c, parte B) — búsqueda de la PUI: fases 1, 2 y 3
+
+**Fuente:** Manual Técnico v1.0 (12/01/2026),
+`clavepui-frontend/docs/Manual_Tecnico_Plataforma_Unica_de_Identidad_Instituciones_Diversas.pdf`.
+Leído completo. Las fases están en la sección 6 (paso 4) y las
+definiciones 5.5–5.7; los endpoints, en las secciones 7.1–7.3 y 8.2. Toda
+integración con la PUI se verifica contra ese archivo.
+
+### Qué hace cada fase (`services/puiBusqueda.js`)
+- **Disparo:** `POST /activar-reporte` guarda el reporte y encola la
+  búsqueda en la cola `pui-busquedas`, sin esperar a Redis para responder
+  (medido: 200 en 40 ms). jobId `busqueda-<hotel>-<id>`; 6 intentos con
+  espera exponencial desde 30 s.
+- **Fase 1, completar datos.** Toma el registro más reciente de esa CURP en
+  el hotel: el último check-in, con los nombres que falten tomados de
+  `huespedes_frecuentes`.
+  - Manda un único aviso con `fase_busqueda` "1", sin `tipo_evento`,
+    `fecha_evento`, `descripcion_lugar_evento` ni `direccion_evento`.
+  - Si no hay registro o ningún dato, no se notifica.
+- **Fase 2, histórica.** Revisa los check-ins de esa CURP desde
+  `fecha_desaparicion` hasta la recepción del reporte, acotado a 12 años
+  contados desde la recepción.
+  - Sin fecha de desaparición, la fase se omite.
+  - Un aviso por check-in, "2", con los campos de evento; el check-in queda
+    `estado_pui = 'enviado'`.
+- **`/busqueda-finalizada`:** siempre al terminar las fases 1 y 2, haya o
+  no coincidencias, y también si la fase 2 se omitió (el manual pide
+  avisar "una vez concluidos estos dos primeros pasos"). Deja
+  `reportes_activos.busqueda_estado = 'finalizada'`.
+- **Fase 3, continua ("3", con evento)** llega por tres caminos:
+  1. el worker de cada check-in nuevo (`puiQueue.js`);
+  2. cada edición de habitación (`encolarEdicion`): "registros
+     modificados". El folio no se manda a la PUI, así que cambiarlo no
+     genera aviso;
+  3. un barrido periódico (`barridoFase3`, cada `PUI_BARRIDO_MS`, 1 h; el
+     manual sugiere cada 1 h, 4 h o 24 h), que además resincroniza lo que
+     no se pudo encolar.
+- **Criterio de coincidencia, igual en las tres fases:** CURP exacta en el
+  mismo hotel. El nombre no decide.
+- **Nunca notifican:**
+  - hoteles con `es_prueba`;
+  - hoteles sin `gov_pui_clave` (sin enlace);
+  - reportes desactivados, que se revisa antes de cada aviso y antes de
+    `/busqueda-finalizada`.
+
+### Idempotencia y reintentos
+- **Tabla `pui_notificaciones`** (RLS por hotel; GRANT por el bucle de
+  `initDb()`). La llave única es `(hotel_id, reporte_id, fase, check_in_id,
+  huella)`.
+  - Fase 1 usa `check_in_id = 0`.
+  - Fases 1 y 2 usan `huella = ''`: un aviso por check-in, fase y reporte.
+  - Fase 3 usa `huella = sha256(payload)`: el mismo contenido nunca se
+    repite y un contenido modificado sí se notifica.
+- **Antes de llamar** se reserva la fila (`enviando`). Una reserva de más
+  de 2 min o una fila en `error` se puede retomar.
+- **Respuestas de `/notificar-coincidencia` (7.2):**
+
+  | Código | Qué hace el backend |
+  |---|---|
+  | 200 | `enviada` |
+  | 300 | `multiple`: se registra y no se reintenta; el manual no dice qué hacer y es una respuesta definitiva de la PUI |
+  | 400 | `rechazada`, con los mensajes de la PUI; sin reintento |
+  | 401 | pide token nuevo y reintenta una vez |
+  | 5xx, red o timeout | error transitorio: el job se reintenta y lo ya enviado no se repite |
+  | 403 en `/login` | permanente (`UnrecoverableError`) |
+
+- **Token por hotel:** en memoria, se renueva a los 45 min (el manual da
+  1 h y recomienda renovar antes del 80 %).
+- **Resincronización:** `reencolarBusquedas()` corre en cada vuelta del
+  reencolador. Toma los reportes `pendiente`/`error` de hoteles enlazados
+  con más de `PUI_REENCOLAR_GRACIA_MS` de antigüedad, espaciando los
+  reintentos por `PUI_BUSQUEDA_REINTENTO_MS` (30 min). Los reportes que ya
+  existían al desplegar quedan `pendiente`, así que también se procesan.
+
+### Payload campo por campo contra el manual 7.2 (`services/puiPayload.js`)
+| Campo | Origen | Regla del manual |
+|---|---|---|
+| curp | check-in / reporte | `^[A-Z0-9]{18}$` |
+| nombre_completo {nombre, primer_apellido, segundo_apellido} | check-in (fase 1: + frecuentes) | **objeto** (antes se mandaban sueltos); cada uno `^[A-Za-zÁÉÍÓÚÜÑáéíóúüñ '-]{1,50}$` |
+| fecha_nacimiento | CURP, con el siglo por la posición 17 (dígito = 19xx) | YYYY-MM-DD |
+| lugar_nacimiento | CURP posiciones 12-13 → Anexo 5 (con acentos) | obligatorio; NE → FORÁNEO, inválido → DESCONOCIDO |
+| sexo_asignado | CURP posición 11 | `^[MHX]$` |
+| telefono / correo | check-in, solo si cumplen su regex | `^\+?\d{0,15}$` / regex de correo |
+| domicilio, fotos, huellas | no se capturan: se omiten | opcionales |
+| id | id del reporte | 36–75 |
+| institucion_id | RFC del hotel | `^[A-Z0-9]{4,13}$` |
+| fase_busqueda | "1" / "2" / "3" | `^[1-3]$` |
+| tipo_evento (fases 2 y 3) | "Check-in en hotel" | ≤ 500, caracteres de dirección |
+| fecha_evento (fases 2 y 3) | **fecha del check-in en hora del hotel** (antes: fecha UTC del envío) | YYYY-MM-DD: el manual pide fecha, sin hora |
+| descripcion_lugar_evento (fases 2 y 3) | "<razón social>, habitación <n>" | ≤ 500, caracteres de dirección |
+| direccion_evento | **se omite**: `hoteles` no guarda domicilio | opcional |
+
+- **Normalización de nombres:** se normalizan a la regex del manual
+  (quitar el punto, ’ → ', acentos fuera de ÁÉÍÓÚÜÑ a su letra base) y un
+  campo que queda vacío se omite. Así la PUI no rechaza un aviso con 400
+  por un detalle de forma, por ejemplo "MA. GUADALUPE" → "MA GUADALUPE".
+- **Discrepancia del manual:** la sección 7.2 escribe "FORANEO", pero el
+  Anexo 5 (al que remite) y la 8.2 dicen "FORÁNEO". Se usa la tabla del
+  Anexo 5. **Confirmar en el sandbox.**
+
+### Otros cambios de esta parte
+- **Llave de `reportes_activos`:** `(hotel_id, id)` (migración idempotente
+  en `initDb()`; si hubiera filas sin `hotel_id`, no se aplica y avisa).
+  - **Bug corregido:** la PUI manda el mismo id a todas las instituciones,
+    y con la llave solo en `id` la activación en un segundo hotel fallaba
+    por RLS ("new row violates row-level security policy"), es decir, 500
+    al gobierno. Reproducido en local con la política real.
+  - Índice único `(hotel_id, id)` y `ON CONFLICT (hotel_id, id)` en
+    `/activar-reporte`.
+- **`requireAuth`** (endpoints de la PUI) ahora exige `sub = 'pui-gobierno'`
+  e `iss = 'clavepui'`. Antes un JWT de staff (mismo secreto, con
+  `hotel_id`) podía activar o desactivar reportes; ahora recibe 403.
+- **`/activar-reporte`** valida `fecha_desaparicion` (YYYY-MM-DD o
+  vacía/nula; si no, 400).
+- **`PUI_API_URL`** (nueva):
+  - en producción, por defecto el API real
+    (`https://www.api.plataformadebusqueda.gob.mx/api/2_3_0`);
+  - **fuera de producción no hay valor por defecto** y el cliente se niega
+    a llamar, así nunca se le pega al API real desde local ni desde las
+    pruebas (antes, un check-in local con reporte activo llamaba al API
+    real);
+  - también nuevas: `PUI_API_TIMEOUT_MS`, `PUI_BUSQUEDA_REINTENTO_MS` y
+    `PUI_BARRIDO_MS`;
+  - `PUI_COLA_PREFIJO` y `PUI_BUSQUEDA_BACKOFF_MS` son solo para pruebas.
+- **Logs:** solo hotel, id del reporte, fase, id del check-in, resultado y
+  código HTTP, sin CURP ni nombres. La bitácora `pui_notificaciones` sirve
+  de rastro de "respuestas enviadas a la PUI" (Anexo 3, trazabilidad).
+
+### Pruebas: `npm run test:pui-fases` (47)
+- **Cómo corren:**
+  - en el mismo proceso, sin el backend, con mock del API en 127.0.0.1;
+  - el mock valida cada aviso con las regex del manual;
+  - colas con prefijo propio;
+  - crea sus propios hoteles y los borra al terminar.
+- **Casos:**
+  - coincidencias históricas;
+  - sin coincidencias (igual se llama a finalizada);
+  - sin fecha de desaparición;
+  - más de 12 años;
+  - fase 3 con check-in nuevo, edición de habitación (sí avisa) y de folio
+    (no avisa);
+  - contenido repetido;
+  - hotel de prueba y hotel sin enlace;
+  - respuestas 300, 401 y 400;
+  - 500 con reintento por BullMQ;
+  - mismo id de reporte en dos hoteles;
+  - JWT de staff → 403;
+  - fecha inválida → 400;
+  - Anexo 5 y nombres normalizados;
+  - la protección contra el API real.
+- **Regresión:** `test-checkin-v2` 84/84 y `test-rls.js` 9/9.
+
+### Pendiente antes de producción
+- **Metropol (prod id 2) tiene una `gov_pui_clave` de prueba** (memoria del
+  proyecto): con esto cuenta como "enlazado". El reencolador intentaría las
+  fases 1 y 2 de sus reportes `pendiente` contra el API real con esa clave
+  falsa, y el login fallaría con 403. Ponerla en NULL antes de desplegar.
+- **`direccion_evento`:** hace falta guardar el domicilio del hotel para
+  mandarlo.
+
 ## Sesión 2026-10-22 (tarea 4c, parte A) — ajustar la validación antes de desplegar
 
 **Resultado en producción** del bloque 2 de `contar-posibles-inyecciones.sql`,
@@ -784,7 +944,12 @@ src/
                      encolado_pui (false = aviso a la PUI pendiente de encolar),
                      metodo_captura ('ocr'|'qr'|'lector'|'frecuente'|'manual'|NULL),
                      editado_tras_escaneo (NULL en registros sin método)
-- reportes_activos — id, curp, hotel_id, nombre, raw_payload, recibido_en, activo
+- reportes_activos — PK (hotel_id, id), curp, nombre, fecha_desaparicion, raw_payload,
+                     recibido_en, activo, busqueda_estado/intentada_en/finalizada_en
+                     (fases 1 y 2)
+- pui_notificaciones — avisos a /notificar-coincidencia por hotel, reporte,
+                     fase, check-in y huella (idempotencia; ver sesión 2026-10-22,
+                     tarea 4c parte B). RLS igual que check_ins
 - check_ins_ediciones — id, check_in_id, hotel_id, campo, valor_anterior,
                      valor_nuevo, editado_por, editado_en (RLS igual que
                      check_ins/usuarios/reportes_activos)
@@ -907,7 +1072,12 @@ Hotel Marlowe (id=3):  pui_clave=MarlowePUI2026!Sec
 Hotel Manalba (id=4):  pui_clave=ManalbaPUI2026!Sec (dado de alta 2026-08-28,
                         RFC HAR730131M1A)
 
-## Flujo BullMQ — puiQueue.js
+## Flujo BullMQ — puiQueue.js (fase 3) y puiBusqueda.js (fases 1 y 2)
+**Desde la tarea 4c los pasos 2-7 de abajo son históricos:** la fase 3 usa
+`notificarFase3()` (payload del manual, idempotencia, sin enlace = no
+notifica) y las fases 1 y 2 corren al activar un reporte. Ver "Sesión
+2026-10-22 (tarea 4c, parte B)".
+
 1. Check-in registrado (`encolado_pui = false`) → job encolado con hotel_id y
    jobId `checkin-<id>` (máx. 2 s; si Redis no responde queda pendiente y el
    reencolador lo reintenta cada minuto) → `encolado_pui = true`. El worker

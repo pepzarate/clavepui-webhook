@@ -20,6 +20,17 @@ const config = {
         // Antigüedad mínima de un pendiente para reencolarlo: deja terminar
         // el intento de la propia request (que dura hasta encolarTimeoutMs).
         reencolarGraciaMs: Number.parseInt(process.env.PUI_REENCOLAR_GRACIA_MS) || 30000,
+        // API del gobierno (Manual Técnico, sección 7). Fuera de producción
+        // NO hay valor por defecto: sin PUI_API_URL explícita (p. ej. el mock
+        // de las pruebas) el cliente se niega a llamar, así nunca se le pega
+        // al API real desde local ni desde las pruebas (services/puiApi.js).
+        apiUrl: process.env.PUI_API_URL
+            || (process.env.NODE_ENV === 'production' ? 'https://www.api.plataformadebusqueda.gob.mx/api/2_3_0' : null),
+        apiTimeoutMs: Number.parseInt(process.env.PUI_API_TIMEOUT_MS) || 10000,
+        // Reintento de la búsqueda histórica (fases 1 y 2) que quedó en error
+        busquedaReintentoMs: Number.parseInt(process.env.PUI_BUSQUEDA_REINTENTO_MS) || 30 * 60 * 1000,
+        // Barrido de la fase 3 (búsqueda continua periódica)
+        barridoMs: Number.parseInt(process.env.PUI_BARRIDO_MS) || 60 * 60 * 1000,
     },
 
     db: {

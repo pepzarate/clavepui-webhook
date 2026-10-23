@@ -4,7 +4,7 @@ const { logger } = require('../middleware/logger');
 const { requireUsuarioStaff } = require('../middleware/auth');
 const { validarFormatoCURP, parsearCURP, enmascararCURP } = require('../utils/curp');
 const { validarCamposTexto } = require('../utils/validacionCheckIn');
-const { intentarEncolar } = require('../services/puiQueue');
+const { intentarEncolar, encolarEdicion } = require('../services/puiQueue');
 const { conHoraLocal, zonaDelHotel } = require('../utils/zonaHoraria');
 
 const router = express.Router();
@@ -338,10 +338,12 @@ router.post('/check-ins/:id/editar', requireHotel, requireUsuarioStaff, async (r
             // siempre manda ambos campos aunque el usuario solo haya
             // tocado uno, y guardar sin cambios no debe generar ruido en
             // el rastro de auditoría.
+            let habitacionCambio = false;
             for (const campo of Object.keys(cambios)) {
                 const valorAnterior = checkIn[campo];
                 const valorNuevo = cambios[campo] || null;
                 if (valorAnterior === valorNuevo) continue;
+                if (campo === 'numero_habitacion') habitacionCambio = true;
 
                 await client.query(
                     `INSERT INTO check_ins_ediciones
@@ -358,7 +360,7 @@ router.post('/check-ins/:id/editar', requireHotel, requireUsuarioStaff, async (r
                 );
             }
 
-            return { checkin: actualizado.rows[0] };
+            return { checkin: actualizado.rows[0], habitacionCambio };
         });
 
         if (resultado.error) {
@@ -372,6 +374,13 @@ router.post('/check-ins/:id/editar', requireHotel, requireUsuarioStaff, async (r
             editado_por: req.usuarioStaff.email,
             campos: Object.keys(cambios),
         });
+
+        // Registro modificado → la fase 3 lo revisa otra vez (manual 6.4.c).
+        // La habitación va en descripcion_lugar_evento; el folio no se manda
+        // a la PUI, así que cambiarlo no genera aviso. Sin esperar a Redis.
+        if (resultado.habitacionCambio && !req.hotel.es_prueba) {
+            encolarEdicion({ id: checkInId, hotel_id: req.hotel.id });
+        }
 
         return res.status(200).json({
             message: 'Check-in actualizado correctamente',

@@ -335,6 +335,78 @@ async function initDb() {
       ON check_ins_ediciones(hotel_id);
     `);
 
+    // ── Búsqueda de la PUI, fases 1 y 2 (tarea 4c, Manual Técnico sección 6.4) ──
+    // Estado de la búsqueda histórica de cada reporte: 'pendiente' al llegar,
+    // 'finalizada' cuando /busqueda-finalizada respondió 200, 'error' si se
+    // agotaron los reintentos (el reencolador la vuelve a intentar).
+    await client.query(`
+      ALTER TABLE reportes_activos
+        ADD COLUMN IF NOT EXISTS busqueda_estado TEXT NOT NULL DEFAULT 'pendiente',
+        ADD COLUMN IF NOT EXISTS busqueda_intentada_en TIMESTAMPTZ,
+        ADD COLUMN IF NOT EXISTS busqueda_finalizada_en TIMESTAMPTZ;
+    `);
+    // Los reportes que ya existían cuando se agregó la columna se recibieron
+    // antes de que hubiera fases 1 y 2: quedan 'pendiente' y el reencolador
+    // los procesa (es lo que pide el manual para cualquier reporte activo).
+
+    // La PUI manda el MISMO id de reporte a todas las instituciones (manual,
+    // sección 6, paso 3). Con la llave solo en `id`, la activación del
+    // segundo hotel chocaba con el reporte del primero (bajo RLS, error). La
+    // llave pasa a (hotel_id, id). Solo si no hay filas sin hotel_id (las de
+    // antes del multi-tenant); si las hay, se deja como está y se avisa.
+    await client.query(`
+      DO $$
+      BEGIN
+        IF EXISTS (
+          SELECT 1 FROM pg_constraint
+          WHERE conrelid = 'reportes_activos'::regclass AND conname = 'reportes_activos_pkey'
+            AND pg_get_constraintdef(oid) = 'PRIMARY KEY (id)'
+        ) THEN
+          IF EXISTS (SELECT 1 FROM reportes_activos WHERE hotel_id IS NULL) THEN
+            RAISE WARNING 'reportes_activos tiene filas sin hotel_id: la llave sigue siendo solo (id)';
+          ELSE
+            ALTER TABLE reportes_activos ALTER COLUMN hotel_id SET NOT NULL;
+            ALTER TABLE reportes_activos DROP CONSTRAINT reportes_activos_pkey;
+            ALTER TABLE reportes_activos ADD CONSTRAINT reportes_activos_pkey PRIMARY KEY (hotel_id, id);
+          END IF;
+        END IF;
+      END $$;
+    `);
+
+    // ON CONFLICT (hotel_id, id) en /activar-reporte funciona con cualquiera
+    // de las dos llaves (si la migración de arriba no se pudo aplicar).
+    await client.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_reportes_activos_hotel_id_id
+      ON reportes_activos (hotel_id, id);
+    `);
+
+    // Bitácora de avisos a la PUI (/notificar-coincidencia), por reporte,
+    // fase y check-in. Hace idempotente el envío: un mismo check-in nunca se
+    // notifica dos veces en la misma fase para el mismo reporte.
+    //   check_in_id = 0 en la fase 1 (un único aviso por reporte).
+    //   huella = '' en fases 1 y 2; en la fase 3 es el sha256 del contenido
+    //   enviado, para que un registro MODIFICADO (manual: "registros nuevos o
+    //   modificados") se vuelva a notificar y uno igual no.
+    // estado: enviando | enviada (200) | multiple (300) | rechazada (400) | error
+    // Sin datos personales: solo ids, fase, estado y código HTTP.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS pui_notificaciones (
+        id             SERIAL PRIMARY KEY,
+        hotel_id       INTEGER NOT NULL REFERENCES hoteles(id),
+        reporte_id     TEXT NOT NULL,
+        fase           SMALLINT NOT NULL CHECK (fase IN (1, 2, 3)),
+        check_in_id    INTEGER NOT NULL DEFAULT 0,
+        huella         TEXT NOT NULL DEFAULT '',
+        estado         TEXT NOT NULL,
+        http_status    INTEGER,
+        intentos       INTEGER NOT NULL DEFAULT 0,
+        ultimo_error   TEXT,
+        creado_en      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        actualizado_en TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (hotel_id, reporte_id, fase, check_in_id, huella)
+      );
+    `);
+
     // En producción, DATABASE_URL (dueño de las tablas, usado para crearlas
     // arriba) y DATABASE_URL_TENANT (clavepui_tenant, usado por
     // withHotelContext) son roles DISTINTOS — Postgres no le da a
@@ -352,7 +424,7 @@ async function initDb() {
     // ── Row Level Security — aislamiento multi-tenant a nivel de BD ─────────
     // FORCE es necesario porque el rol de conexión es dueño de las tablas,
     // y Postgres exime a los dueños de RLS por defecto salvo que se fuerce.
-    for (const tabla of ['check_ins', 'reportes_activos', 'usuarios', 'huespedes_frecuentes', 'push_subscriptions', 'check_ins_ediciones']) {
+    for (const tabla of ['check_ins', 'reportes_activos', 'usuarios', 'huespedes_frecuentes', 'push_subscriptions', 'check_ins_ediciones', 'pui_notificaciones']) {
       await client.query(`ALTER TABLE ${tabla} ENABLE ROW LEVEL SECURITY;`);
       await client.query(`ALTER TABLE ${tabla} FORCE ROW LEVEL SECURITY;`);
       await client.query(`DROP POLICY IF EXISTS hotel_isolation ON ${tabla};`);

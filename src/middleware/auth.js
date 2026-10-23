@@ -22,6 +22,17 @@ function requireAuth(req, res, next) {
 
     try {
         const decoded = jwt.verify(token, config.jwt.secret);
+        // Solo el token que emite POST /login a la PUI. El JWT de sesión del
+        // staff se firma con el mismo secreto y también trae hotel_id: sin
+        // esta revisión, un recepcionista podía activar o desactivar reportes.
+        if (decoded.sub !== 'pui-gobierno' || decoded.iss !== 'clavepui') {
+            logger.warn('Token que no es de la PUI en un endpoint de la PUI', {
+                type: 'auth_failure',
+                url: req.originalUrl,
+                ip: req.ip,
+            });
+            return res.status(403).json({ error: 'Sin permisos' });
+        }
         req.puiAuth = decoded;
         next();
     } catch (err) {
