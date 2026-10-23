@@ -371,7 +371,7 @@ async function pruebasValidacion(a) {
         [{ segundo_apellido: 'javascript:x' }, 'segundo_apellido'],
         [{ nombre: 'JUAN2' }, 'nombre'],
         [{ nombre: 'A'.repeat(51) }, 'nombre'],
-        [{ numero_habitacion: '10 1' }, 'numero_habitacion'],
+        [{ numero_habitacion: '10/1' }, 'numero_habitacion'],
         [{ numero_habitacion: '<b>1</b>' }, 'numero_habitacion'],
         [{ folio_pms: 'F"1' }, 'folio_pms'],
         [{ folio_pms: 'F'.repeat(41) }, 'folio_pms'],
@@ -391,11 +391,25 @@ async function pruebasValidacion(a) {
     try { reglaCodigo(['<'], 10); } catch { rechazoProhibido = true; }
     caso('la regla no deja agregar < > " \' ` = & : ;', rechazoProhibido);
 
+    // Habitación con varias habitaciones (tarea 4c): coma y espacio, normalizada
+    const varias = await checkIn(a, { curp: CURP_B, numero_habitacion: '101 ,102' });
+    caso('habitación "101 ,102" aceptada y guardada como "101, 102"',
+        varias.status === 201 && varias.datos.checkin.numero_habitacion === '101, 102', `${varias.status} ${varias.datos.checkin?.numero_habitacion}`);
+    const qr = await checkIn(a, { curp: CURP_B, folio_pms: `${CURP_B}||PEREZ|LOPEZ|JUAN|H|01/01/1990|DF|` });
+    caso('contenido del QR en el folio → 400 con el aviso de campo equivocado',
+        qr.status === 400 && qr.datos.campo === 'folio_pms' && /campo equivocado/.test(qr.datos.error), qr.datos.error);
+    const coma = await checkIn(a, { curp: CURP_B, nombre: 'JUAN, PEDRO' });
+    caso('coma en el nombre sigue rechazada', coma.status === 400 && coma.datos.campo === 'nombre');
+    const folioComa = await checkIn(a, { curp: CURP_B, folio_pms: 'F,1' });
+    caso('coma en el folio sigue rechazada', folioComa.status === 400 && folioComa.datos.campo === 'folio_pms');
+
     const base = await checkIn(a, { curp: CURP_B, numero_habitacion: '300' });
     const ed1 = await http('POST', `/check-ins/${base.datos.checkin.id}/editar`, { hotel: a, jwtDe: a, body: { numero_habitacion: '30<1' } });
     caso('editar: 400 para habitación inválida', ed1.status === 400 && ed1.datos.campo === 'numero_habitacion', String(ed1.status));
     const ed2 = await http('POST', `/check-ins/${base.datos.checkin.id}/editar`, { hotel: a, jwtDe: a, body: { numero_habitacion: '301-B', folio_pms: '' } });
     caso('editar: valores válidos (y folio vacío) aceptados', ed2.status === 200, String(ed2.status));
+    const ed3 = await http('POST', `/check-ins/${base.datos.checkin.id}/editar`, { hotel: a, jwtDe: a, body: { numero_habitacion: '301,302' } });
+    caso('editar: "301,302" se guarda como "301, 302"', ed3.status === 200 && ed3.datos.checkin.numero_habitacion === '301, 302', ed3.datos.checkin?.numero_habitacion);
 }
 
 async function pruebasConfigSinClave(a) {

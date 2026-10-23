@@ -3,7 +3,7 @@ const { pool, withHotelContext } = require('../db');
 const { logger } = require('../middleware/logger');
 const { requireUsuarioStaff } = require('../middleware/auth');
 const { validarFormatoCURP, parsearCURP, enmascararCURP } = require('../utils/curp');
-const { validarCamposTexto } = require('../utils/validacionCheckIn');
+const { validarCamposTexto, normalizarHabitacion } = require('../utils/validacionCheckIn');
 const { intentarEncolar, encolarEdicion } = require('../services/puiQueue');
 const { conHoraLocal, zonaDelHotel } = require('../utils/zonaHoraria');
 
@@ -87,8 +87,11 @@ router.post('/check-ins', requireHotel, async (req, res) => {
         return res.status(400).json({ error: 'editado_tras_escaneo debe ser true o false' });
     }
 
+    // Habitación normalizada ("101 , 102" → "101, 102") antes de validar y guardar
+    const habitacionNormalizada = normalizarHabitacion(numero_habitacion);
+
     // Nombres, folio y habitación: longitud y caracteres permitidos (tarea 4b)
-    const invalido = validarCamposTexto(req.body);
+    const invalido = validarCamposTexto({ ...req.body, numero_habitacion: habitacionNormalizada });
     if (invalido) {
         return res.status(400).json({ error: invalido.error, campo: invalido.campo });
     }
@@ -150,7 +153,7 @@ router.post('/check-ins', requireHotel, async (req, res) => {
                     telefono,
                     correo,
                     registrado_por || 'recepcion',
-                    numero_habitacion || null,
+                    habitacionNormalizada || null,
                     folio_pms || null,
                     metodo_captura ?? null,
                     editado_tras_escaneo ?? null,
@@ -275,6 +278,7 @@ router.post('/check-ins/:id/editar', requireHotel, requireUsuarioStaff, async (r
         });
     }
 
+    if ('numero_habitacion' in cambios) cambios.numero_habitacion = normalizarHabitacion(cambios.numero_habitacion);
     const invalido = validarCamposTexto(cambios, Object.keys(cambios));
     if (invalido) {
         return res.status(400).json({ error: invalido.error, campo: invalido.campo });

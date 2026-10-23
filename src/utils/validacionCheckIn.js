@@ -17,15 +17,26 @@
  *   se arman solos. Los de PROHIBIDOS (< > " ' ` = & : ;) no se pueden
  *   agregar: sirven para inyectar HTML o JS y el módulo no carga.
  *
+ * Habitación: además admite coma y espacio para varias habitaciones
+ * ("101, 102"); normalizarHabitacion() deja siempre "101, 102" al guardar
+ * (decisión del 2026-10-22, con los datos reales de producción).
+ *
+ * Un "|" en cualquiera de estos campos es casi siempre el contenido del QR
+ * de la INE que el lector USB tecleó en el campo equivocado: se rechaza con
+ * un mensaje que lo dice (MENSAJE_QR_CAMPO_EQUIVOCADO).
+ *
  * Vacío, null o ausente sigue siendo válido (checkin.astro solo exige la
  * CURP). No recorta ni cambia mayúsculas: se valida el valor tal como se
  * guardará.
  */
 const SIMBOLOS_FOLIO = ['-'];
-const SIMBOLOS_HABITACION = ['-'];
+const SIMBOLOS_HABITACION = ['-', ',', ' '];
+
+const MENSAJE_QR_CAMPO_EQUIVOCADO =
+    'Parece una lectura del QR en el campo equivocado; colócate en el campo CURP y vuelve a escanear';
 
 const PROHIBIDOS = new Set(['<', '>', '"', "'", '`', '=', '&', ':', ';']);
-const NOMBRES_SIMBOLOS = { '-': 'guion', '/': 'diagonal', '.': 'punto', '#': 'gato (#)', '_': 'guion bajo', ' ': 'espacio' };
+const NOMBRES_SIMBOLOS = { '-': 'guion', ',': 'coma', '/': 'diagonal', '.': 'punto', '#': 'gato (#)', '_': 'guion bajo', ' ': 'espacio' };
 
 /** Regla para folio/habitación: [A-Za-z0-9] + los símbolos dados. */
 function reglaCodigo(simbolos, max) {
@@ -73,6 +84,7 @@ function validarCamposTexto(body, campos = Object.keys(REGLAS)) {
         if (valor === undefined || valor === null || valor === '') continue;
         const regla = REGLAS[campo];
         if (typeof valor !== 'string') return { campo, error: `${ETIQUETAS[campo]} debe ser texto` };
+        if (valor.includes('|')) return { campo, error: MENSAJE_QR_CAMPO_EQUIVOCADO };
         if ([...valor].length > regla.max) {
             return { campo, error: `${ETIQUETAS[campo]} admite máximo ${regla.max} caracteres` };
         }
@@ -83,4 +95,21 @@ function validarCamposTexto(body, campos = Object.keys(REGLAS)) {
     return null;
 }
 
-module.exports = { validarCamposTexto, reglaCodigo, REGLAS, SIMBOLOS_FOLIO, SIMBOLOS_HABITACION };
+/**
+ * "101 , 102" / "101,102" / " 101  ,102 " → "101, 102". Espacios internos de
+ * una habitación se reducen a uno ("SUITE  2" → "SUITE 2"). Otros valores
+ * (vacío, null, no texto) se devuelven igual.
+ */
+function normalizarHabitacion(valor) {
+    if (typeof valor !== 'string') return valor;
+    return valor
+        .split(',')
+        .map((h) => h.trim().replace(/\s+/g, ' '))
+        .filter(Boolean)
+        .join(', ');
+}
+
+module.exports = {
+    validarCamposTexto, normalizarHabitacion, reglaCodigo, REGLAS,
+    SIMBOLOS_FOLIO, SIMBOLOS_HABITACION, MENSAJE_QR_CAMPO_EQUIVOCADO,
+};

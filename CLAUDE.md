@@ -12,10 +12,38 @@ npm run dev  (nodemon — puerto 8080)
 Docker Redis: docker start clavepui-redis (en este WSL, `docker` a secas es el
 shim roto de Docker Desktop: usar `/snap/bin/docker`)
 
+## Sesión 2026-10-22 (tarea 4c, cierre) — regla final de folio y habitación
+
+**Resultado de `caracteres-no-permitidos.sql` en producción:**
+
+| Campo | Ids | Qué tenía |
+|---|---|---|
+| folio | 344 | "\|" (contenido del QR tecleado por el lector USB) |
+| nombre | 343, 274 | "," |
+| nombre | 1458, 1389 | dígitos (el contenido del QR) |
+| segundo apellido | 105, 36 | dígitos |
+| habitación | 565 | "," (varias habitaciones) |
+
+Decisiones del usuario, ya implementadas:
+- **Habitación:** `SIMBOLOS_HABITACION = ['-', ',', ' ']`.
+  `normalizarHabitacion()` guarda "101 , 102" / "101,102" como "101, 102",
+  en `POST /check-ins` y en `/editar`, antes de validar.
+- **Folio** solo con guion. **Nombres** sin cambios.
+- **"|" en folio, habitación o nombres** → 400 con
+  `MENSAJE_QR_CAMPO_EQUIVOCADO`: "Parece una lectura del QR en el campo
+  equivocado; colócate en el campo CURP y vuelve a escanear". El frontend
+  muestra lo mismo en el campo.
+- **Manual Técnico** movido a `docs/pui/` de este repo (en git).
+- **Metropol** ya tiene la `gov_pui_clave` en NULL; ningún hotel real tiene
+  clave.
+- **Pruebas:** `test-checkin-v2` sube a 89 (habitación con coma
+  normalizada al crear y al editar, QR en el folio, coma en nombre y folio
+  rechazada).
+
 ## Sesión 2026-10-22 (tarea 4c, parte B) — búsqueda de la PUI: fases 1, 2 y 3
 
 **Fuente:** Manual Técnico v1.0 (12/01/2026),
-`clavepui-frontend/docs/Manual_Tecnico_Plataforma_Unica_de_Identidad_Instituciones_Diversas.pdf`.
+`clavepui-webhook/docs/pui/Manual_Tecnico_Plataforma_Unica_de_Identidad_Instituciones_Diversas.pdf`.
 Leído completo. Las fases están en la sección 6 (paso 4) y las
 definiciones 5.5–5.7; los endpoints, en las secciones 7.1–7.3 y 8.2. Toda
 integración con la PUI se verifica contra ese archivo.

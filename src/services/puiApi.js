@@ -1,6 +1,6 @@
 /**
  * Cliente del API de la PUI (Manual Técnico, sección 7; copia en
- * clavepui-frontend/docs/Manual_Tecnico_Plataforma_Unica_de_Identidad_Instituciones_Diversas.pdf).
+ * docs/pui/Manual_Tecnico_Plataforma_Unica_de_Identidad_Instituciones_Diversas.pdf de este repo).
  *
  *   POST /login                  { institucion_id: RFC, clave } → { token }   (7.1)
  *   POST /notificar-coincidencia  payload de puiPayload.js                  (7.2)
