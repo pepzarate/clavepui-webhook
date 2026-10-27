@@ -119,6 +119,11 @@ Decisiones del usuario, ya implementadas:
 
 **Fuente:** Manual Técnico v1.0 (12/01/2026),
 `clavepui-webhook/docs/pui/Manual_Tecnico_Plataforma_Unica_de_Identidad_Instituciones_Diversas.pdf`.
+El proceso de alta de un hotel en el portal de la PUI (Llave MX con perfil
+de persona moral, e.firma del representante legal, prueba de webhook con IP
+y URL base, credenciales, aprobación o rechazo por correo) está en
+`docs/pui/Guia_del_Sitio_de_Inscripcion_para_Instituciones_Diversas.pdf`
+(v2.0, 20/04/2026; agregada el 2026-10-27).
 Leído completo. Las fases están en la sección 6 (paso 4) y las
 definiciones 5.5–5.7; los endpoints, en las secciones 7.1–7.3 y 8.2. Toda
 integración con la PUI se verifica contra ese archivo.
