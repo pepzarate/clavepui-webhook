@@ -41,7 +41,7 @@ const METODOS = {
 
 /** Hotel con su enlace a la PUI (req.hotel de requireHotel no trae gov_pui_clave). */
 async function datosHotel(req) {
-    const r = await pool.query(`SELECT gov_pui_clave, es_prueba FROM hoteles WHERE id = $1`, [req.hotel.id]);
+    const r = await pool.query(`SELECT gov_pui_clave, es_prueba, enlace_simulado FROM hoteles WHERE id = $1`, [req.hotel.id]);
     return { ...req.hotel, enlazado: hotelEnlazado(r.rows[0]) };
 }
 

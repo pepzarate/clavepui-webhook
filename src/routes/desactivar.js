@@ -32,7 +32,7 @@ router.post('/desactivar-reporte', requireAuth, async (req, res) => {
     try {
         const result = await withHotelContext(hotel_id, (client) => client.query(
             `UPDATE reportes_activos
-       SET activo = FALSE
+       SET activo = FALSE, desactivado_en = COALESCE(desactivado_en, NOW())
        WHERE id = $1
        RETURNING id`,
             [id]

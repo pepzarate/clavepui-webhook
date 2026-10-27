@@ -12,6 +12,99 @@ npm run dev  (nodemon — puerto 8080)
 Docker Redis: docker start clavepui-redis (en este WSL, `docker` a secas es el
 shim roto de Docker Desktop: usar `/snap/bin/docker`)
 
+## Sesión 2026-10-27 (tarea 6) — Alertas v2: GET /alertas y /alertas/contador
+
+Lo usa `/alertas-nuevo` (frontend) y el contador de la navegación de las
+pantallas nuevas. `/reportes-activos` y `/reportes-historial` (página vieja)
+no cambian.
+
+### Rutas (`routes/alertas.js`)
+- **Auth:** `requireHotel` + `requireUsuarioStaff`; otro hotel → 403.
+- **`GET /alertas/contador`** → `{ contador }`, para los dos roles, sin
+  datos personales.
+- **`GET /alertas`**, según el rol (lo decide el servidor, no la página):
+  - **Recepción:** solo `{ rol, estado, contador }`, con `estado`
+    `no_enlazado` | `sin_coincidencias` | `requiere_atencion`. Los reportes
+    sin coincidencia se ven como `sin_coincidencias`. Nunca nombre,
+    habitación, CURP (ni enmascarada), fechas ni datos del reporte.
+    Ejemplo: `{"rol":"recepcionista","estado":"requiere_atencion","contador":6}`.
+  - **Gerencia:** `estado` (`no_enlazado` | `sin_reportes` |
+    `reportes_sin_coincidencia` | `coincidencia`), `contador` y:
+    - `coincidencias`: huésped, habitación, `fecha_local`/`hora_local` del
+      check-in, `registrado_por` (del check-in ligado por
+      `pui_notificaciones`) y `aviso` (`enviado` | `pendiente` | `error` |
+      `rechazado` | `multiple`, con fase, intentos y fecha/hora local solo
+      cuando el gobierno ya respondió). Primero rechazado y error;
+    - `reportes_activos`: CURP con solo 4 letras (`PELA***`), fecha de
+      recepción, estado de la búsqueda (`pendiente`/`finalizada`/`error`) y
+      cuántas coincidencias; sin nombre de la persona ni id del reporte;
+    - `reportes_cerrados` (los 50 más recientes) y `total_cerrados`.
+  - **Sin enlace:** `{ rol, estado: 'no_enlazado', contador: 0 }`, sin
+    detalle.
+
+### Criterio del contador (solo con el hotel enlazado; sin enlace es 0)
+Revisado contra los valores reales de `pui_notificaciones` (fase, estado,
+`check_in_id = 0` en fase 1) y `reportes_activos` (`activo`,
+`busqueda_estado`):
+
+- **Coincidencias:** pares distintos (reporte ACTIVO, check-in), sacados de
+  lo que el sistema de verdad decidió avisar:
+  1. avisos de fase 2/3 ligados a un check-in;
+  2. aviso de fase 1 → el check-in más reciente de esa CURP (el que usó la
+     fase 1);
+  3. check-ins `estado_pui = 'enviado'` de antes de la 4c (sin ninguna fila
+     de aviso) con la CURP del reporte.
+
+  Cada par cuenta UNA vez, sea cual sea el estado de su aviso; si hubo
+  varios intentos, gana el último.
+- **+ avisos con error que no son de una coincidencia:** reportes activos con
+  `busqueda_estado = 'error'` (`/busqueda-finalizada` agotó sus reintentos).
+- Un aviso con error o rechazado de una coincidencia ya está en su par: no
+  se cuenta dos veces. Los reportes cerrados no cuentan. Un check-in con la
+  CURP de un reporte pero sin aviso (por ejemplo, anterior a la
+  desaparición, fuera de la fase 2) tampoco.
+
+### Otros cambios
+- **`reportes_activos.desactivado_en`** (nueva): la pone
+  `/desactivar-reporte`; `/activar-reporte` la vuelve a NULL. NULL en los
+  cerrados antes de esta columna (se muestran como "Cerrado" sin fecha).
+- **Enlace simulado para probar en local:** `hoteles.enlace_simulado`
+  (nueva, default FALSE). `hotelEnlazado()` (`utils/estadoPui.js`) la
+  respeta solo si el hotel es de prueba y `NODE_ENV` no es `production`.
+  Solo cambia lo que se MUESTRA (Alertas, Historial): el worker y el
+  reencolador siguen omitiendo los hoteles de prueba, así que nunca se llama
+  al API del gobierno. Sin GRANT: `hoteles` no tiene RLS.
+- **`datos-hotel-prueba.js`:** `--alertas=<escenario>` (`sin-reportes`,
+  `sin-coincidencia`, `enviado`, `pendiente`, `error`, `rechazado`,
+  `multiple`, `todas`; `--con-alertas` = `todas`) y `--enlace-simulado`.
+  Los avisos se escriben directo en `pui_notificaciones`.
+  `borrar-datos-hotel-prueba.js` ahora también borra `pui_notificaciones`.
+- **Logs:** solo `hotel_id` y el mensaje de error.
+
+### Pruebas: `npm run test:alertas` (48)
+Crea hoteles de prueba propios (con y sin `enlace_simulado`), datos
+inventados y los borra al final:
+- 401 sin credenciales, 403 con la clave de otro hotel, 401 con JWT de la PUI;
+- criterio del contador (7 coincidencias por los tres caminos + 1 fin de
+  búsqueda con error = 8; sin aviso y cerrados no cuentan; reintento
+  contado una vez);
+- cada estado del aviso, con y sin fecha, y el orden;
+- detalle de Gerencia sin CURP completa, sin nombre de la persona reportada
+  y sin id de reporte;
+- **JSON completo de Recepción:** solo las llaves `rol`, `estado` y
+  `contador`, sin nombres, habitaciones, CURP, fechas ni horas;
+- estados A/B/C por rol; `enlace_simulado` ignorado en producción;
+- `desactivado_en` al cerrar un reporte.
+
+Regresión: `test-historial` 45, `test-checkin-v2` 89, `test-pui-fases` 47,
+`test-rls` 9.
+
+### Desplegar
+Backend antes que el frontend: `initDb()` crea las dos columnas y la página
+nueva necesita `GET /alertas`. Sin el backend nuevo, el contador falla en
+silencio (queda oculto) y `/alertas-nuevo` muestra "No se pudieron cargar
+las alertas".
+
 ## Sesión 2026-10-27 (tarea 5) — Historial v2: GET /historial, detalle y exportar
 
 Lo usa `/historial-nuevo` (frontend). Las rutas viejas (`GET /check-ins`,
@@ -1017,6 +1110,8 @@ src/
 │   ├── ocr.js            — POST /ocr/ine (lee CURP + nombre de una INE vía el
 │   │                       servicio de OCR; requireHotel + requireUsuarioStaff,
 │   │                       limitador propio por usuario, ver Sesión 2026-10-15)
+│   ├── alertas.js        — GET /alertas (detalle solo para gerente) y
+│   │                       GET /alertas/contador (tarea 6)
 │   ├── hoteles.js        — GET /hoteles/config (gerente), GET /hoteles/funciones
 │   │                       (feature flags, cualquier staff)
 │   ├── admin.js          — POST /admin/hoteles, /admin/hoteles/:id/gov-clave,
@@ -1043,7 +1138,8 @@ src/
 - hoteles          — id, nombre, rfc, pui_clave, gov_pui_clave, activo,
                      checkin_v2 (flag de /checkin-nuevo, default false)
                      es_prueba (hotel de prueba: nunca toca la PUI, ver
-                     sesión 2026-10-22)
+                     sesión 2026-10-22), enlace_simulado (solo hoteles de
+                     prueba fuera de producción, tarea 6)
 - usuarios         — id, hotel_id, nombre, email, password_hash, rol, activo
 - check_ins        — id, hotel_id, curp, nombre, primer_apellido, segundo_apellido,
                      fecha_nacimiento, lugar_nacimiento, sexo_asignado,
@@ -1054,7 +1150,7 @@ src/
                      editado_tras_escaneo (NULL en registros sin método)
 - reportes_activos — PK (hotel_id, id), curp, nombre, fecha_desaparicion, raw_payload,
                      recibido_en, activo, busqueda_estado/intentada_en/finalizada_en
-                     (fases 1 y 2)
+                     (fases 1 y 2), desactivado_en (tarea 6)
 - pui_notificaciones — avisos a /notificar-coincidencia por hotel, reporte,
                      fase, check-in y huella (idempotencia; ver sesión 2026-10-22,
                      tarea 4c parte B). RLS igual que check_ins

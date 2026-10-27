@@ -9,14 +9,45 @@
  * prueba (solo ese hotel, y solo si tiene es_prueba = TRUE). Los check-ins se
  * insertan directo en la BD: no se encolan ni van a la PUI.
  *
- * Local:       node src/scripts/datos-hotel-prueba.js [--con-alertas] [--dias=7]
+ * Alertas (tarea 6), con --alertas=<escenario>:
+ *   sin-reportes          ningún reporte de búsqueda
+ *   sin-coincidencia      2 reportes activos que no coinciden + 2 cerrados
+ *   enviado | pendiente | error | rechazado | multiple
+ *                         una coincidencia con el aviso en ese estado
+ *                         (+ 1 reporte sin coincidencia y 2 cerrados)
+ *   todas                 una coincidencia por cada estado del aviso, 1
+ *                         reporte sin coincidencia, 1 con el aviso de fin de
+ *                         búsqueda en error y 2 cerrados
+ * --con-alertas equivale a --alertas=todas. Los avisos se escriben directo
+ * en pui_notificaciones: nunca se llama al API del gobierno.
+ *
+ * --enlace-simulado marca el hotel con enlace_simulado = TRUE (sin él, lo
+ * deja en FALSE): el backend lo muestra como enlazado SOLO fuera de
+ * producción, sin ninguna clave real (ver utils/estadoPui.js). Sin enlace,
+ * Alertas muestra "Hotel aún no enlazado".
+ *
+ * Local:       node src/scripts/datos-hotel-prueba.js [--alertas=todas] [--enlace-simulado] [--dias=7]
  * Producción:  railway run -- sh -c 'DATABASE_URL="$DATABASE_PUBLIC_URL" node src/scripts/datos-hotel-prueba.js'
  */
 const { conectar, buscarHotelPrueba, conContextoDelHotel } = require('./lib/hotelPrueba');
 const { borrarDatos } = require('./borrar-datos-hotel-prueba');
 
 const ZONA = 'America/Mexico_City';
-const CON_ALERTAS = process.argv.includes('--con-alertas');
+const ESCENARIOS_ALERTAS = ['sin-reportes', 'sin-coincidencia', 'enviado', 'pendiente', 'error', 'rechazado', 'multiple', 'todas'];
+const ESCENARIO = process.argv.includes('--con-alertas')
+    ? 'todas'
+    : (process.argv.find((a) => a.startsWith('--alertas=')) || '').split('=')[1] || null;
+const ENLACE_SIMULADO = process.argv.includes('--enlace-simulado');
+
+// Estado del aviso en la pantalla → cómo lo deja el backend en pui_notificaciones y check_ins
+const AVISOS = {
+    enviado: { estado: 'enviada', http: 200, intentos: 1, estadoPui: 'enviado', fase: 3 },
+    pendiente: { estado: 'enviando', http: null, intentos: 0, estadoPui: 'pendiente', fase: 3 },
+    error: { estado: 'error', http: 503, intentos: 3, estadoPui: 'error', fase: 3 },
+    rechazado: { estado: 'rechazada', http: 400, intentos: 1, estadoPui: 'error', fase: 3 },
+    multiple: { estado: 'multiple', http: 300, intentos: 1, estadoPui: 'enviado', fase: 2 },
+};
+const REGISTRADORES = ['Recepción Prueba', 'Turno Noche Prueba', 'Gerencia Prueba'];
 const DIAS = Number.parseInt((process.argv.find((a) => a.startsWith('--dias=')) || '--dias=7').split('=')[1], 10);
 
 // Generador reproducible (siempre los mismos datos)
@@ -62,12 +93,87 @@ function personaInventada() {
     return { nombre, paterno, materno, nacimiento, sexo, entidad, sexoAsignado, curp: curpDe({ nombre, paterno, materno, nacimiento, sexo, entidad }) };
 }
 
+/** Reporte de búsqueda inventado. El worker ignora hoteles de prueba: nunca se notifica nada. */
+async function insertarReporte(db, hotel, id, p, { activo = true, dias = 1, busqueda = 'finalizada', cerradoHaceDias = null }) {
+    await db.query(
+        `INSERT INTO reportes_activos (id, curp, nombre, primer_apellido, segundo_apellido, fecha_nacimiento,
+            lugar_nacimiento, sexo_asignado, hotel_id, activo, raw_payload, recibido_en, busqueda_estado, desactivado_en)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'{"prueba": true}', NOW() - make_interval(days => $11), $12,
+                 CASE WHEN $13::int IS NULL THEN NULL ELSE NOW() - make_interval(days => $13::int) END)`,
+        [id, p.curp, p.nombre, p.paterno, p.materno, p.nacimiento, p.entidad, p.sexoAsignado, hotel.id, activo, dias,
+            busqueda, cerradoHaceDias]
+    );
+}
+
+/** Check-in de hoy de la persona p con un aviso en el estado dado (como lo dejaría el backend). */
+async function insertarCoincidencia(db, hotel, reporteId, p, aviso, { habitacion, minuto, registradoPor }) {
+    const a = AVISOS[aviso];
+    const ci = await db.query(
+        `INSERT INTO check_ins (hotel_id, curp, nombre, primer_apellido, segundo_apellido, fecha_nacimiento,
+            lugar_nacimiento, sexo_asignado, numero_habitacion, estado_pui, intentos_pui, registrado_por,
+            encolado_pui, metodo_captura, fecha_checkin)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,TRUE,'ocr',
+                 (date_trunc('day', NOW() AT TIME ZONE '${ZONA}') + make_interval(mins => $13)) AT TIME ZONE '${ZONA}')
+         RETURNING id, fecha_checkin`,
+        [hotel.id, p.curp, p.nombre, p.paterno, p.materno, p.nacimiento, p.entidad, p.sexoAsignado, habitacion,
+            a.estadoPui, a.intentos, registradoPor, minuto]
+    );
+    const { id, fecha_checkin: fecha } = ci.rows[0];
+    await db.query(
+        `INSERT INTO pui_notificaciones (hotel_id, reporte_id, fase, check_in_id, huella, estado, http_status,
+            intentos, ultimo_error, creado_en, actualizado_en)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, $10::timestamptz + interval '1 minute', $10::timestamptz + interval '1 minute')`,
+        [hotel.id, reporteId, a.fase, id, a.fase === 3 ? `prueba-${id}` : '', a.estado, a.http, a.intentos,
+            a.estado === 'error' ? 'Error de prueba (ficticio)' : null, fecha]
+    );
+}
+
+/** Reportes y avisos del escenario de Alertas elegido. Devuelve cuántos reportes insertó. */
+async function cargarAlertas(db, hotel, escenario) {
+    if (escenario === 'sin-reportes') return 0;
+    const id = (n) => `PRUEBA-${hotel.id}-${n}`;
+    let n = 0;
+    // Siempre: un reporte activo sin coincidencia (CURP que no está en el hotel) y dos cerrados
+    await insertarReporte(db, hotel, id(++n), personaInventada(), { dias: 6 });
+    if (escenario === 'sin-coincidencia') await insertarReporte(db, hotel, id(++n), personaInventada(), { dias: 2 });
+    await insertarReporte(db, hotel, id(++n), personaInventada(), { activo: false, dias: 20, cerradoHaceDias: 12 });
+    await insertarReporte(db, hotel, id(++n), personaInventada(), { activo: false, dias: 40, cerradoHaceDias: null });
+    if (escenario === 'sin-coincidencia') return n;
+
+    const avisos = escenario === 'todas' ? Object.keys(AVISOS) : [escenario];
+    const habitaciones = ['305', '210', '108', '401', '204'];
+    for (const [i, aviso] of avisos.entries()) {
+        const p = personaInventada();
+        const reporte = id(++n);
+        await insertarReporte(db, hotel, reporte, p, { dias: 1 + i });
+        await insertarCoincidencia(db, hotel, reporte, p, aviso, {
+            habitacion: habitaciones[i % habitaciones.length],
+            minuto: 7 * 60 + 15 * i, // de 07:00 en adelante, antes de los demás check-ins
+            registradoPor: REGISTRADORES[i % REGISTRADORES.length],
+        });
+    }
+    if (escenario === 'todas') {
+        // Reporte sin coincidencia cuyo aviso de fin de búsqueda falló (cuenta en el contador)
+        await insertarReporte(db, hotel, id(++n), personaInventada(), { dias: 3, busqueda: 'error' });
+    }
+    return n;
+}
+
 async function main() {
+    if (ESCENARIO && !ESCENARIOS_ALERTAS.includes(ESCENARIO)) {
+        throw new Error(`Escenario de alertas desconocido: ${ESCENARIO} (opciones: ${ESCENARIOS_ALERTAS.join(', ')})`);
+    }
     const db = conectar();
     await db.connect();
     try {
         const hotel = await buscarHotelPrueba(db);
         if (!hotel) throw new Error('No existe el hotel de prueba: corre antes crear-hotel-prueba.js');
+
+        // hoteles no tiene RLS; el WHERE es_prueba es la salvaguarda
+        await db.query(`UPDATE hoteles SET enlace_simulado = $2 WHERE id = $1 AND es_prueba = TRUE`, [hotel.id, ENLACE_SIMULADO]);
+        if (ENLACE_SIMULADO && process.env.NODE_ENV === 'production') {
+            console.log('Aviso: en producción el backend ignora enlace_simulado (el hotel se sigue viendo sin enlace).');
+        }
 
         await conContextoDelHotel(db, hotel.id, async () => {
             const borrados = await borrarDatos(db, hotel.id);
@@ -136,24 +242,9 @@ async function main() {
                 );
             }
 
-            // Reportes de búsqueda inventados (para ver Alertas con datos). El
-            // worker ignora hoteles de prueba, así que nunca se notifica nada.
-            let alertas = 0;
-            if (CON_ALERTAS) {
-                const coincide = personas[1];
-                const otra = personaInventada();
-                for (const [i, p, activo] of [[1, coincide, true], [2, otra, true], [3, personaInventada(), false]]) {
-                    await db.query(
-                        `INSERT INTO reportes_activos (id, curp, nombre, primer_apellido, segundo_apellido, fecha_nacimiento,
-                            lugar_nacimiento, sexo_asignado, hotel_id, activo, raw_payload, recibido_en)
-                         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'{"prueba": true}', NOW() - make_interval(days => $11))`,
-                        [`PRUEBA-${hotel.id}-${i}`, p.curp, p.nombre, p.paterno, p.materno, p.nacimiento, p.entidad,
-                            p.sexoAsignado, hotel.id, activo, i]
-                    );
-                    alertas++;
-                }
-            }
-            console.log(`Insertados: ${total} check-ins (${DIAS} días), ${frecuentes.length} huéspedes frecuentes, 1 edición, ${alertas} reportes de búsqueda.`);
+            const alertas = ESCENARIO ? await cargarAlertas(db, hotel, ESCENARIO) : 0;
+            console.log(`Insertados: ${total} check-ins (${DIAS} días), ${frecuentes.length} huéspedes frecuentes, 1 edición, ${alertas} reportes de búsqueda`
+                + `${ESCENARIO ? ` (escenario ${ESCENARIO})` : ''}; enlace simulado: ${ENLACE_SIMULADO ? 'sí' : 'no'}.`);
         });
     } finally {
         await db.end();

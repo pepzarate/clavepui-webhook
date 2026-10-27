@@ -380,6 +380,16 @@ async function initDb() {
       ON reportes_activos (hotel_id, id);
     `);
 
+    // Alertas (tarea 6): fecha en que la PUI cerró el reporte (/desactivar-reporte).
+    // NULL en los cerrados antes de esta columna.
+    await client.query(`ALTER TABLE reportes_activos ADD COLUMN IF NOT EXISTS desactivado_en TIMESTAMPTZ;`);
+
+    // Solo para probar en local las pantallas de un hotel enlazado SIN clave
+    // real: utils/estadoPui.js lo respeta únicamente si el hotel es de prueba
+    // y NODE_ENV no es production. Nunca hace que se llame a la PUI (el
+    // worker omite siempre los hoteles de prueba).
+    await client.query(`ALTER TABLE hoteles ADD COLUMN IF NOT EXISTS enlace_simulado BOOLEAN NOT NULL DEFAULT FALSE;`);
+
     // Bitácora de avisos a la PUI (/notificar-coincidencia), por reporte,
     // fase y check-in. Hace idempotente el envío: un mismo check-in nunca se
     // notifica dos veces en la misma fase para el mismo reporte.

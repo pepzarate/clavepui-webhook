@@ -76,6 +76,7 @@ router.post('/activar-reporte', requireAuth, async (req, res) => {
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,TRUE)
        ON CONFLICT (hotel_id, id) DO UPDATE SET
          activo = TRUE,
+         desactivado_en = NULL,
          hotel_id = $13,
          raw_payload = $12`,
             [

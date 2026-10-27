@@ -4,8 +4,9 @@
  * TRUE y todo corre con el contexto RLS de ese hotel (no puede tocar otro).
  *
  * Por defecto solo cuenta lo que borraría (simulacro).
- *   --confirmar       borra check-ins, ediciones, huéspedes frecuentes y
- *                     reportes de búsqueda del hotel de prueba
+ *   --confirmar       borra check-ins, ediciones, huéspedes frecuentes,
+ *                     reportes de búsqueda y avisos (pui_notificaciones) del
+ *                     hotel de prueba
  *   --incluir-hotel   además borra sus usuarios, suscripciones push y el hotel
  *
  * Local:       node src/scripts/borrar-datos-hotel-prueba.js [--confirmar] [--incluir-hotel]
@@ -13,7 +14,7 @@
  */
 const { conectar, buscarHotelPrueba, conContextoDelHotel } = require('./lib/hotelPrueba');
 
-const TABLAS_DATOS = ['check_ins_ediciones', 'check_ins', 'huespedes_frecuentes', 'reportes_activos'];
+const TABLAS_DATOS = ['check_ins_ediciones', 'pui_notificaciones', 'check_ins', 'huespedes_frecuentes', 'reportes_activos'];
 
 /** Borra (o cuenta, si contar = true) los datos del hotel. Llamar dentro de conContextoDelHotel. */
 async function borrarDatos(db, hotelId, { contar = false } = {}) {

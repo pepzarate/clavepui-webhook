@@ -80,7 +80,15 @@ function textoEstado(estado, aviso) {
     return estado === 'coincidencia' && aviso ? `${base} (${ETIQUETAS_AVISO[aviso] ?? aviso})` : base;
 }
 
-/** ¿El hotel está enlazado con la PUI? (de prueba nunca cuenta) */
-const hotelEnlazado = (hotel) => Boolean(hotel?.gov_pui_clave) && !hotel?.es_prueba;
+/**
+ * ¿El hotel está enlazado con la PUI? Un hotel de prueba nunca cuenta, salvo
+ * que tenga enlace_simulado y NO estemos en producción: así se prueban en
+ * local las pantallas de un hotel enlazado sin ninguna clave real. Mostrarlo
+ * como enlazado no cambia nada del envío: el worker omite los de prueba.
+ */
+const hotelEnlazado = (hotel) => {
+    if (hotel?.es_prueba) return Boolean(hotel.enlace_simulado) && process.env.NODE_ENV !== 'production';
+    return Boolean(hotel?.gov_pui_clave);
+};
 
 module.exports = { ESTADOS, ETIQUETAS, ETIQUETAS_AVISO, sqlEstado, textoEstado, hotelEnlazado };

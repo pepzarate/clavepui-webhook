@@ -20,6 +20,7 @@ const pushRoutes = require('./routes/push');
 const ocrRoutes = require('./routes/ocr');
 const cspRoutes = require('./routes/csp');
 const historialRoutes = require('./routes/historial');
+const alertasRoutes = require('./routes/alertas');
 
 const app = express();
 
@@ -121,6 +122,7 @@ app.use('/', desactivarRoutes);           // POST /desactivar-reporte
 app.use('/', adminRoutes);
 app.use('/', checkInsRoutes);
 app.use('/', historialRoutes);              // GET /historial, /historial/exportar, /historial/:id (tarea 5)
+app.use('/', alertasRoutes);                // GET /alertas, /alertas/contador (tarea 6)
 app.use('/', usuariosRoutes);
 app.use('/', reportesRoutes);
 app.use('/', hotelesRoutes);
