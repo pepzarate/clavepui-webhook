@@ -406,6 +406,11 @@ async function initDb() {
         UNIQUE (hotel_id, reporte_id, fase, check_in_id, huella)
       );
     `);
+    // Estado v2 del historial (utils/estadoPui.js): último aviso por check-in
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_pui_notificaciones_check_in
+      ON pui_notificaciones (hotel_id, check_in_id, actualizado_en DESC);
+    `);
 
     // En producción, DATABASE_URL (dueño de las tablas, usado para crearlas
     // arriba) y DATABASE_URL_TENANT (clavepui_tenant, usado por

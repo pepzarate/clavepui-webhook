@@ -12,6 +12,81 @@ npm run dev  (nodemon — puerto 8080)
 Docker Redis: docker start clavepui-redis (en este WSL, `docker` a secas es el
 shim roto de Docker Desktop: usar `/snap/bin/docker`)
 
+## Sesión 2026-10-27 (tarea 5) — Historial v2: GET /historial, detalle y exportar
+
+Lo usa `/historial-nuevo` (frontend). Las rutas viejas (`GET /check-ins`,
+`/check-ins/export`, `/reportes/pdf`) no cambian: las siguen usando las páginas
+actuales.
+
+### Rutas (`routes/historial.js`)
+- **`GET /historial?desde&hasta&estado&q&limit&offset`** devuelve:
+  - `rango` (`desde`, `hasta` y `hoy` en la zona del hotel);
+  - `hotel_enlazado` y `puede_elegir_rango`;
+  - `resumen` del rango sin filtros (total + un contador por estado nuevo);
+  - `total` con filtros;
+  - `checkins` con la CURP enmascarada, `hora_local`, `es_hoy`, `estado` y
+    `aviso`.
+  Pagina de 50 (máximo 100).
+- **`GET /historial/:id`:** detalle con CURP completa, `registrado_por`,
+  método de captura (texto), `editado_tras_escaneo` y las ediciones
+  (`check_ins_ediciones`).
+- **`GET /historial/exportar?formato=csv|pdf`:** con el mismo rango, filtro y
+  búsqueda que la lista, y los nombres nuevos de los estados.
+  - **CSV:**
+    - todas las celdas entre comillas, así "101, 102" no rompe columnas;
+    - una celda que empieza con `= + - @` o tabulador lleva un apóstrofo
+      delante (inyección en Excel);
+    - columnas de hora y "Capturado por";
+    - BOM al inicio.
+  - **PDF:** `services/historialPdf.js`, con las lecciones del incidente
+    del PDF (septiembre); `/reportes/pdf` no se tocó.
+  - Máximo 10 000 filas (413).
+- **Auth:** `requireHotel` + `requireUsuarioStaff`, así el servidor conoce
+  el rol.
+  - **Recepción:** solo el día de hoy, en lista, detalle y exportación
+    (403 si pide otra fecha). Hasta ahora eso solo lo imponía la página
+    vieja: `GET /check-ins` deja ver cualquier fecha con la
+    `x-hotel-key`.
+  - **Gerencia:** hasta 366 días.
+- **Búsqueda (`q`, 2 a 50 caracteres) en el servidor:**
+  - nombre completo sin acentos (`clavepui_sin_acentos`, de la tarea 2);
+  - CURP, habitación o folio con `ILIKE`;
+  - comodines escapados;
+  - todo dentro de `withHotelContext`, así que RLS aplica;
+  - el término no se loguea.
+- Índice nuevo `idx_pui_notificaciones_check_in`.
+
+### Vocabulario de estados (`utils/estadoPui.js`; el frontend tiene el texto en `utils/estadosPui.ts`)
+Mapeo desde los valores reales (`estado_pui`: pendiente / sin_reporte /
+enviado / error; `pui_notificaciones.estado`: enviando / enviada / multiple /
+rechazada / error), en este orden:
+
+| Estado nuevo | Cuándo |
+|---|---|
+| Registrado | hotel SIN enlace (sin `gov_pui_clave` o de prueba). Se decide por el enlace ACTUAL del hotel |
+| Coincidencia | `estado_pui = 'enviado'` o hay un aviso de fase 2/3 ligado al check-in. Sub-estado del aviso: enviado, multiple (300), pendiente, error (se reintenta), rechazado (400) |
+| En revisión | `pendiente` |
+| Sin coincidencia | `sin_reporte` |
+| Error al verificar | `error` sin aviso ligado; un valor desconocido también cae aquí, para no esconderlo |
+
+- **Revisar en producción**, con
+  `src/scripts/sql/estados-pui-por-hotel.sql` (solo lectura). Con el hotel
+  sin enlace todo se ve "Registrado", así que conviene ver si quedaron
+  filas `enviado`/`error` de cuando algún hotel tuvo una clave de prueba:
+  ```bash
+  railway run -- sh -c 'psql "$DATABASE_PUBLIC_URL" -X -q -f src/scripts/sql/estados-pui-por-hotel.sql'
+  ```
+- **Pruebas:** `npm run test:historial` (45) cubre:
+  - rango por rol;
+  - cada estado y sub-estado;
+  - contadores;
+  - búsqueda con y sin acentos, por CURP, habitación y folio, comodines y
+    otro hotel;
+  - detalle (completo, de ayer para recepción, de otro hotel);
+  - CSV (filtro, nombres nuevos, comillas y fórmulas) y PDF.
+
+  Regresión: `test-checkin-v2` 89, `test-pui-fases` 47 y `test-rls` 9/9.
+
 ## Sesión 2026-10-22 (tarea 4c, cierre) — regla final de folio y habitación
 
 **Resultado de `caracteres-no-permitidos.sql` en producción:**
