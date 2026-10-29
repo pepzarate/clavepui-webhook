@@ -25,10 +25,17 @@ function horaLocal(fecha, zona = ZONA_HORARIA_DEFAULT) {
     }).format(new Date(fecha));
 }
 
+/** 'HH:MM' (24 h) → '3:30 p.m.' (12 h, como la app y el diseño; tarea 7). */
+function hora12(hhmm) {
+    const [h, m] = String(hhmm).split(':').map(Number);
+    if (!Number.isInteger(h) || !Number.isInteger(m)) return String(hhmm ?? '');
+    return `${h % 12 || 12}:${String(m).padStart(2, '0')} ${h < 12 ? 'a.m.' : 'p.m.'}`;
+}
+
 /** Agrega fecha_local y hora_local a un objeto con fecha_checkin (no cambia lo demás). */
 function conHoraLocal(fila, zona = ZONA_HORARIA_DEFAULT) {
     if (!fila?.fecha_checkin) return fila;
     return { ...fila, fecha_local: fechaLocal(fila.fecha_checkin, zona), hora_local: horaLocal(fila.fecha_checkin, zona) };
 }
 
-module.exports = { ZONA_HORARIA_DEFAULT, zonaDelHotel, fechaLocal, horaLocal, conHoraLocal };
+module.exports = { ZONA_HORARIA_DEFAULT, zonaDelHotel, fechaLocal, horaLocal, hora12, conHoraLocal };

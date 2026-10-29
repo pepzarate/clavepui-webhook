@@ -129,4 +129,15 @@ function requireUsuarioStaff(req, res, next) {
     }
 }
 
-module.exports = { requireAuth, requireGerente, requireUsuarioStaff };
+/**
+ * Solo Gerencia (tarea 7: Panel y Configuración). Va DESPUÉS de
+ * requireUsuarioStaff: Recepción recibe 403 aunque llame al API directo.
+ */
+function soloGerente(req, res, next) {
+    if (req.usuarioStaff?.rol !== 'gerente') {
+        return res.status(403).json({ error: 'Solo la gerencia puede ver esta sección' });
+    }
+    next();
+}
+
+module.exports = { requireAuth, requireGerente, requireUsuarioStaff, soloGerente };

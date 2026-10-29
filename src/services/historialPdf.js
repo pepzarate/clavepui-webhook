@@ -7,6 +7,7 @@
  * (nunca doc.pipe(res)) con listener de 'error'.
  */
 const PDFDocument = require('pdfkit');
+const { fechaLocal, horaLocal, hora12 } = require('../utils/zonaHoraria');
 
 const COLOR_ESTADO = {
     registrado: '#475069',
@@ -32,11 +33,12 @@ function generarPdfHistorial({ hotel, desde, hasta, filas, filtrado }) {
         doc.fillColor('#1b305b').font('Helvetica-Bold').fontSize(12).text(hotel.nombre, 40, 80, { width: ancho });
         doc.font('Helvetica').fontSize(9).fillColor('#475069')
             .text(`RFC: ${hotel.rfc}   ·   Periodo: ${desde === hasta ? desde : `${desde} a ${hasta}`}   ·   Registros: ${filas.length}${filtrado ? '   ·   Con filtros aplicados' : ''}`, 40, 98, { width: ancho });
-        doc.text(`Generado: ${new Date().toLocaleString('es-MX', { timeZone: 'America/Mexico_City' })}`, 40, 111, { width: ancho });
+        const ahora = new Date();
+        doc.text(`Generado: ${fechaLocal(ahora)} ${hora12(horaLocal(ahora))}`, 40, 111, { width: ancho });
 
         const cols = [
-            { t: 'Fecha', w: 62 }, { t: 'Hora', w: 38 }, { t: 'Hab.', w: 60 }, { t: 'Folio', w: 70 },
-            { t: 'Huésped', w: 170 }, { t: 'CURP', w: 112 }, { t: 'Estado PUI', w: 200 },
+            { t: 'Fecha', w: 62 }, { t: 'Hora', w: 50 }, { t: 'Hab.', w: 60 }, { t: 'Folio', w: 70 },
+            { t: 'Huésped', w: 170 }, { t: 'CURP', w: 112 }, { t: 'Estado PUI', w: 188 },
         ];
         let y = 132;
         const encabezado = () => {
@@ -56,7 +58,8 @@ function generarPdfHistorial({ hotel, desde, hasta, filas, filtrado }) {
                 encabezado();
             }
             doc.rect(40, y, ancho, 17).fill(i % 2 ? '#f7f9fd' : '#ffffff');
-            const valores = [f.fecha, f.hora, f.habitacion || '—', f.folio || '—',
+            // Hora en 12 h (tarea 7); el CSV la deja en 24 h
+            const valores = [f.fecha, hora12(f.hora), f.habitacion || '—', f.folio || '—',
                 [f.nombre, f.primer_apellido, f.segundo_apellido].filter(Boolean).join(' ') || '—', f.curp, f.estado];
             let x = 40;
             cols.forEach((c, j) => {

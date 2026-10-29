@@ -10,7 +10,8 @@
     "test:checkin-v2": "node tests/test-checkin-v2.js",
     "test:pui-fases": "node tests/test-pui-fases.js",
     "test:historial": "node tests/test-historial.js",
-    "test:alertas": "node tests/test-alertas.js"
+    "test:alertas": "node tests/test-alertas.js",
+    "test:panel": "node tests/test-panel.js"
   },
   "keywords": [],
   "author": "",

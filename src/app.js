@@ -21,6 +21,7 @@ const ocrRoutes = require('./routes/ocr');
 const cspRoutes = require('./routes/csp');
 const historialRoutes = require('./routes/historial');
 const alertasRoutes = require('./routes/alertas');
+const panelRoutes = require('./routes/panel');
 
 const app = express();
 
@@ -73,6 +74,9 @@ app.use((req, res, next) => {
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers',
         'Content-Type, Authorization, x-hotel-key, x-admin-token');
+    // Las pantallas nuevas leen el nombre del archivo exportado (CSV/PDF);
+    // sin esto, desde otro origen el navegador lo oculta (tarea 7)
+    res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
     res.setHeader('Access-Control-Allow-Credentials', 'true');
     res.setHeader('Access-Control-Max-Age', '86400');
 
@@ -123,6 +127,7 @@ app.use('/', adminRoutes);
 app.use('/', checkInsRoutes);
 app.use('/', historialRoutes);              // GET /historial, /historial/exportar, /historial/:id (tarea 5)
 app.use('/', alertasRoutes);                // GET /alertas, /alertas/contador (tarea 6)
+app.use('/', panelRoutes);                  // GET /panel, /configuracion (tarea 7, solo gerencia)
 app.use('/', usuariosRoutes);
 app.use('/', reportesRoutes);
 app.use('/', hotelesRoutes);

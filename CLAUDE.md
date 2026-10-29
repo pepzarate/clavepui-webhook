@@ -12,6 +12,65 @@ npm run dev  (nodemon — puerto 8080)
 Docker Redis: docker start clavepui-redis (en este WSL, `docker` a secas es el
 shim roto de Docker Desktop: usar `/snap/bin/docker`)
 
+## Sesión 2026-10-28 (tarea 7) — Panel y Configuración v2: GET /panel y /configuracion
+
+Los usan `/panel-nuevo` y `/configuracion-nuevo` (frontend). `/check-ins/resumen`
+y `/hoteles/config` (páginas viejas) no cambian.
+
+### Rutas (`routes/panel.js`)
+- **Auth:** `requireHotel` + `requireUsuarioStaff` + **`soloGerente`** (nuevo,
+  `middleware/auth.js`): Recepción recibe 403 `{ error: 'Solo la gerencia
+  puede ver esta sección' }` aunque llame al API directo; otro hotel → 403.
+- **`GET /panel`** (hoy, en la zona del hotel), con la consulta y el mapeo de
+  estados de `/historial` (`consultaRango`, `datosHotel`, exportados desde
+  `historial.js`):
+  ```json
+  {"fecha_local":"2026-10-28","hotel_enlazado":true,
+   "resumen":{"total":5,"registrado":0,"sin_coincidencia":2,"en_revision":1,"coincidencia":1,"error":1},
+   "ultimos":[{"id":3421,"nombre":"BRUNO","primer_apellido":"TREVIÑO","segundo_apellido":"ROBLEDO",
+     "numero_habitacion":"210","fecha_local":"2026-10-28","hora_local":"17:52","estado":"coincidencia","aviso":"enviado"}]}
+  ```
+  Sin enlace todo sale `registrado`. Los últimos 5, sin CURP.
+- **`GET /configuracion`**: `{ nombre, rfc, credencial_pui: 'configurada' |
+  'pendiente', aprobacion_gobierno: 'aprobada' | 'pendiente' }`. **Ningún
+  carácter de las claves** (ni los 4 últimos que todavía manda
+  `/hoteles/config` a la página vieja). La aprobación usa `hotelEnlazado()`:
+  un hotel de prueba solo sale "aprobada" con el enlace simulado y fuera de
+  producción.
+- `hoteles` no tiene nombre comercial aparte: "nombre" es la razón social.
+
+### Otros cambios
+- **PDF de `/historial/exportar`:**
+  - **antes:** la columna Hora en 24 h (`15:30`) y "Generado:" con
+    `toLocaleString` (`27/10/2026, 3:05:00 p.m.`);
+  - **ahora:** las dos en 12 h (`3:30 p.m.`), con `hora12()` en
+    `utils/zonaHoraria.js`;
+  - el CSV sigue en 24 h;
+  - el `/reportes/pdf` viejo no se tocó (ya daba `03:05 p.m.`).
+- **CORS:** `Access-Control-Expose-Headers: Content-Disposition`. Sin eso, el
+  navegador ocultaba el nombre del archivo exportado desde otro origen y las
+  descargas de `/historial-nuevo` salían como `historial.csv`. Ahora salen
+  `checkins_<fecha>.csv` / `.pdf`. Afectaba también a producción
+  (app.clavepui.com → api.clavepui.com).
+
+### Pruebas: `npm run test:panel` (27)
+- 403 de Recepción (sin datos en la respuesta), 403 con la clave de otro
+  hotel, 401 sin credenciales, en las dos rutas;
+- cifras de hoy con cada estado (incluido Error) y sin el check-in de ayer;
+- hotel sin enlace: todo `registrado`;
+- sin check-ins: total 0;
+- Configuración: solo las 4 llaves, sin ningún carácter de las claves;
+  aprobada con enlace simulado y con `gov_pui_clave` en un hotel real,
+  pendiente sin enlace y en uno de prueba con clave cargada;
+- `hora12()` y el PDF.
+
+Regresión: `test-alertas` 47, `test-historial` 45, `test-checkin-v2` 89,
+`test-pui-fases` 47, `test-rls` sin fallas.
+
+### Desplegar
+Backend antes que el frontend: `/panel-nuevo` y `/configuracion-nuevo` usan
+las rutas nuevas, y las descargas necesitan el encabezado de CORS. Sin migración.
+
 ## Sesión 2026-10-27 (tarea 6) — Alertas v2: GET /alertas y /alertas/contador
 
 Lo usa `/alertas-nuevo` (frontend) y el contador de la navegación de las
@@ -1112,6 +1171,8 @@ src/
 │   │                       limitador propio por usuario, ver Sesión 2026-10-15)
 │   ├── alertas.js        — GET /alertas (detalle solo para gerente) y
 │   │                       GET /alertas/contador (tarea 6)
+│   ├── panel.js          — GET /panel y GET /configuracion (tarea 7, solo
+│   │                       gerente con soloGerente)
 │   ├── hoteles.js        — GET /hoteles/config (gerente), GET /hoteles/funciones
 │   │                       (feature flags, cualquier staff)
 │   ├── admin.js          — POST /admin/hoteles, /admin/hoteles/:id/gov-clave,

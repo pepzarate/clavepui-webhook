@@ -271,3 +271,6 @@ router.get('/historial/:id', requireHotel, requireUsuarioStaff, async (req, res)
 
 module.exports = router;
 module.exports.generarCsv = generarCsv;
+// Para routes/panel.js (tarea 7): mismo rango y mismo mapeo de estados
+module.exports.datosHotel = datosHotel;
+module.exports.consultaRango = consultaRango;
